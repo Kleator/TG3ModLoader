@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.0 - 2026-10-19
+
+- New, modern window made for players:
+  - a status box that always says what to do next (*Welcome*, *Please combine again*,
+    *Ready to play*, ...),
+  - the mods as cards: tick them, drag them into order, see per mod how many game files it changes
+    and how many conflicts it wins; right-click for its folder or Steam Workshop page,
+  - a **Conflicts** tab where one click picks the value that is used: another mod, the original
+    game's value or your own value; changed choices are marked until the next combine,
+  - an **Activity** tab with the detailed log,
+  - one main button: **Combine & Play**, or **Play** when everything is up to date.
+- Light and dark mode: follows the Windows setting automatically, also while the ModLoader is open
+  (including the title bar).
+- New report: a clear summary of the last combine (mods, conflicts grouped by game area with
+  readable names, notes in plain words); the technical file list is folded away. Light and dark
+  mode as well.
+- Fixed: **Report** opened the report in the layout of the version that made the last combine. The
+  report is now written again from the stored data every time (and once after an update).
+- The combined mod of another ModLoader copy is no longer offered as a mod, and it is switched off
+  in the Mod Launcher when combining (it contains the same files).
+- Keyboard and screen reader support for the new controls (Ctrl+1/2/3, Ctrl+Tab, Space,
+  Alt+Up/Down, F1, F5).
+- New command `report [--out file.html]` writes the report of the last combine again.
+- No change to the merge logic - existing combinations stay valid and do not have to be repeated.
+
 ## 1.1.2 - 2026-10-19
 
 - Fixed: the Windows taskbar showed a generic program icon instead of the ModLoader icon. The window

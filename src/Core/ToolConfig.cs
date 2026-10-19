@@ -66,6 +66,18 @@ namespace TG3ModLoader.Core
             Exists = true;
         }
 
+        /// <summary>Independent copy, e.g. to compute a fingerprint on a background thread.</summary>
+        public ToolConfig Clone() => new ToolConfig
+        {
+            GameDir = GameDir,
+            WorkshopDir = WorkshopDir,
+            UpdateLauncherConfig = UpdateLauncherConfig,
+            IncludeMapsOfMixedMods = IncludeMapsOfMixedMods,
+            Mods = Mods.Select(m => new ModSelection { Id = m.Id, Name = m.Name, Enabled = m.Enabled }).ToList(),
+            ConflictOverrides = new Dictionary<string, string>(ConflictOverrides, StringComparer.Ordinal),
+            Exists = Exists
+        };
+
         /// <summary>Adds newly found mods (disabled) and keeps the stored order for known ones.</summary>
         public void Reconcile(List<ModInfo> catalog)
         {

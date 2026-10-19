@@ -52,7 +52,7 @@ namespace TG3ModLoader.Core
     /// <summary>Builds the merged mod from the selected mods and vanilla.</summary>
     public sealed class Builder
     {
-        public const string ToolVersion = "1.1.2";
+        public const string ToolVersion = "1.2.0";
         /// <summary>Version of the merge logic. Only a change here (not a cosmetic release) requires merging again.</summary>
         const string MergeEngineVersion = "1.1.0";
 
@@ -140,6 +140,8 @@ namespace TG3ModLoader.Core
             return res;
         }
 
+        List<ModInfo> manifestMods = new List<ModInfo>();
+
         public BuildResult Build(bool dryRun, bool updateLauncher)
         {
             var sw = Stopwatch.StartNew();
@@ -213,9 +215,9 @@ namespace TG3ModLoader.Core
                 {
                     WriteOutput(output);
                     if (updateLauncher && cfg.UpdateLauncherConfig) r.LauncherUpdated = UpdateLauncher(selected, r);
-                    WriteManifest(r, selected);
                 }
                 r.Success = true;
+                manifestMods = selected;
             }
             catch (Exception ex)
             {
@@ -226,7 +228,12 @@ namespace TG3ModLoader.Core
             r.Duration = sw.Elapsed;
             if (!dryRun)
             {
-                try { ReportWriter.Write(env.ReportPath, r, env); }
+                if (r.Success)
+                {
+                    try { WriteManifest(r, manifestMods); }
+                    catch (Exception ex) { log("Could not write the manifest: " + ex.Message); }
+                }
+                try { ReportWriter.Write(env.ReportPath, ReportData.FromResult(r, env), env); }
                 catch (Exception ex) { log("Could not write the report: " + ex.Message); }
             }
             log(r.Success
@@ -516,6 +523,13 @@ namespace TG3ModLoader.Core
                 lc.Entries.Insert(0, own);
             }
             own.Enabled = selected.Count > 0;
+            // The combined mod of another ModLoader copy contains the same files - the launcher would refuse to start.
+            foreach (var e in lc.Entries)
+            {
+                if (e == own || !own.Enabled || !e.Enabled || !e.IsFolder || !ModCatalog.IsModLoaderOutput(e.Name)) continue;
+                e.Enabled = false;
+                log("  Disabled in the Mod Launcher (combined mod of another ModLoader copy): " + e.Name);
+            }
             foreach (var m in selected)
             {
                 foreach (var e in lc.Entries)
@@ -622,6 +636,7 @@ namespace TG3ModLoader.Core
                     ["candidates"] = c.Candidates.Select(x => (object)new Dictionary<string, object> { ["mod"] = x.ModName, ["text"] = x.Text }).ToList()
                 }).ToList()
             };
+            ReportData.FromResult(r, env).WriteTo(d);
             File.WriteAllText(env.ManifestPath, Json.Write(d), new UTF8Encoding(false));
         }
 

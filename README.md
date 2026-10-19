@@ -15,10 +15,40 @@ Changes: [CHANGELOG.md](CHANGELOG.md).
    `...\steamapps\workshop\content\311260\TG3ModLoader\TG3ModLoader.exe`
    (`311260` is the Steam app id of The Guild 3; the folder sits next to the numbered folders of
    your subscribed mods).
-3. Start `TG3ModLoader.exe`, check the mods you want, order them (top = highest priority) and click
-   **Merge & start Mod Launcher**. In the official Mod Launcher click **Play**.
+3. Start `TG3ModLoader.exe`, tick the mods you want, drag them into order (the mod at the top wins
+   when two mods change the same setting) and click **Combine & Play**. The official Mod Launcher
+   opens - click **Play** there.
 
 Requires Windows 10/11 (.NET Framework 4.8 is part of Windows) and Steam with The Guild 3 installed.
+
+## The user interface
+
+<p align="center">
+  <img src="assets/screenshot-mods.png" width="49%" alt="Your mods (light mode)">
+  <img src="assets/screenshot-conflicts.png" width="49%" alt="Conflicts (dark mode)">
+</p>
+
+The window is made for players, not modders:
+
+* A **status box** at the top always says what to do next - *Welcome*, *Not combined yet*,
+  *Please combine again* (selection, order, a conflict choice or a mod update changed) or
+  *Ready to play*.
+* **Your mods** - the mods as cards: tick them, drag them into order (or use the arrows on hover,
+  Alt+Up/Down), see per mod how many game files it changes and how many conflicts it wins.
+  Right-click for its folder or Steam Workshop page. Maps are shown but need no combining.
+* **Conflicts** - every setting that several selected mods change differently, grouped by game
+  area with readable names ("Buildable Products In Front Store Amount - Custom Rules > Default
+  Storage Rule 13"). One click picks the winner: another mod, the original game's value or an own
+  value; changed choices are marked until the next combine.
+* **Activity** - the detailed log (copy to clipboard for support requests).
+* One main button: **Combine & Play**, or just **Play** when everything is up to date.
+* **Report** - an HTML summary of the last combine (mods, conflicts, notes in plain words; the
+  technical file list is folded away). It is always written with the current layout, also from
+  combinations made by an older version.
+* **Light and dark mode** follow the Windows setting automatically, also while the program is open
+  (including the title bar); the report follows the browser/Windows setting.
+* The custom controls expose themselves to screen readers (MSAA/UI Automation) and are usable with
+  the keyboard (Ctrl+1/2/3 or Ctrl+Tab switch tabs, Space ticks a mod, F1 help, F5 rescan).
 
 ## The problem
 
@@ -84,10 +114,16 @@ src/
   Core/ModCatalog.cs           scans Workshop and folder mods
   Core/ToolConfig.cs           ModLoader.config.json (selection, order, overrides)
   Core/Builder.cs              merge pipeline, output, manifest, launcher update
-  Core/ReportWriter.cs         HTML report
+  Core/ReportData.cs           everything the report shows; stored in the manifest so the report
+                               can be written again at any time
+  Core/ReportWriter.cs         HTML report (light/dark via prefers-color-scheme)
+  Core/Friendly.cs             player wording for script paths, file areas, values and notes
   Core/TestRun.cs              starts the game with the mod and checks for script errors/crashes
   Core/SelfTest.cs             parser round-trip and pairwise merge tests
-  Gui/MainForm.cs              WinForms user interface
+  Gui/Theme.cs                 light/dark palettes, Windows theme detection, fonts, icons
+  Gui/UiKit.cs                 owner-drawn controls: buttons, tabs, status box, mod list,
+                               conflict list, dialogs (with accessibility objects)
+  Gui/MainForm.cs              main window
   Program.cs                   entry point and command line
 deploy.sh                      build + copy into the Workshop folder
 ```
@@ -110,6 +146,7 @@ TG3ModLoader.exe                         GUI
 TG3ModLoader.exe build [--mods id1,id2] [--all] [--import-launcher] [--no-launcher] [--dry-run] [--launch]
 TG3ModLoader.exe status | import-launcher | launch
 TG3ModLoader.exe resolve "<file>::<path>" <modId | =value | clear>
+TG3ModLoader.exe report [--out file.html]
 TG3ModLoader.exe unregister
 TG3ModLoader.exe selftest [--no-pairs]
 TG3ModLoader.exe testrun [--dir <modfolder>] [--vanilla] [--timeout 600] [--screenshot file.png]

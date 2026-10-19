@@ -4,214 +4,276 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using TG3ModLoader.Core;
 using TG3ModLoader.Merge;
+using TG3ModLoader.Util;
 
 namespace TG3ModLoader.Gui
 {
-    /// <summary>Main window: mod selection and order, merge, conflicts, test run and launcher integration.</summary>
+    /// <summary>Main window: choose and order mods, combine them, look at conflicts and start the game.</summary>
     public sealed class MainForm : Form
     {
         readonly string toolDir;
         GameEnv env;
         ToolConfig cfg;
         List<ModInfo> catalog = new List<ModInfo>();
-        List<Conflict> conflicts = new List<Conflict>();
-        bool busy;
-        bool filling;
+        ReportData last;
+        string lastFingerprint;
+        bool busy, upToDate, statusKnown, firstStart;
+        string transientTitle, transientDetail;
+        DateTime transientUntil;
 
-        readonly Label lblPaths = new Label();
-        readonly Label lblStatus = new Label();
-        readonly ListView lvMods = new ListView();
-        readonly ListView lvConflicts = new ListView();
-        readonly TextBox txtLog = new TextBox();
-        readonly TabControl tabs = new TabControl();
-        readonly ProgressBar progress = new ProgressBar();
-        readonly List<Button> actionButtons = new List<Button>();
+        readonly Timer statusTimer = new Timer { Interval = 300 };
+        int statusRequest;
+
+        // Layout
+        HeaderBar header;
+        Panel body, content, footer, logFrame;
+        StatusBanner banner;
+        NavTabs tabs;
+        Panel pageMods, pageConflicts, pageLog;
+        FlowLayoutPanel modsTools, logTools;
+        TextBlock modsIntro, conflictsIntro, footerInfo;
+        ModListView modList;
+        ConflictListView conflictList;
+        TextBox logBox;
+        FlatButton btnPrimary, btnCombine, btnReport, btnHelp, btnMore, btnAll, btnNone, btnFromLauncher, btnRescan, btnCopyLog;
+        ContextMenuStrip moreMenu, modMenu;
+        readonly List<(ToolStripMenuItem Item, string Glyph)> menuGlyphs = new List<(ToolStripMenuItem, string)>();
+        readonly List<Control> busyLocked = new List<Control>();
 
         public MainForm(string toolDir)
         {
             this.toolDir = toolDir;
-            Text = "TG3 ModLoader " + Builder.ToolVersion + " - merge mods for The Guild 3";
-            Font = new Font("Segoe UI", 9f);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            Size = new Size(1180, 760);
-            MinimumSize = new Size(900, 560);
+            Text = "TG3 ModLoader";
+            AutoScaleMode = AutoScaleMode.None;
+            Font = Theme.Body;
             StartPosition = FormStartPosition.CenterScreen;
-            Icon = LoadAppIcon();
+            Icon = LoadAppIcon(SystemInformation.IconSize.Width);
+            Size = new Size(S(1120), S(780));
+            MinimumSize = new Size(S(880), S(600));
+            DoubleBuffered = true;
             BuildLayout();
-            Load += (s, e) => Reload(true);
+            ApplyTheme();
+            statusTimer.Tick += (s, e) => { statusTimer.Stop(); ComputeStatus(); };
+            Theme.Changed += ApplyTheme;
+            Load += (s, e) => { Theme.StartWatching(this); Reload(true); };
         }
 
-        /// <summary>
-        /// The multi-size program icon. The taskbar needs a real small icon (16/24 px) - a single 32 px icon
-        /// (as returned by ExtractAssociatedIcon) is not taken over by the Windows 11 taskbar.
-        /// </summary>
-        static Icon LoadAppIcon()
-        {
-            try
-            {
-                using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("TG3ModLoader.app.ico"))
-                    if (s != null) return new Icon(s);
-            }
-            catch { }
-            try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
-            catch { return null; }
-        }
+        int S(float v) => (int)Math.Round(v * DeviceDpi / 96f);
 
-        // ---------------- Layout ----------------
+        // ================= Layout =================
 
         void BuildLayout()
         {
-            var header = new Panel { Dock = DockStyle.Top, Height = 74, Padding = new Padding(12, 8, 12, 4), BackColor = Color.FromArgb(38, 44, 52) };
-            var title = new Label { Text = "TG3 ModLoader", ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 15f), AutoSize = true, Location = new Point(12, 6) };
-            lblPaths.ForeColor = Color.FromArgb(200, 205, 210);
-            lblPaths.AutoSize = false;
-            lblPaths.Location = new Point(14, 40);
-            lblPaths.Size = new Size(1100, 30);
-            lblPaths.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
-            header.Controls.Add(title);
-            header.Controls.Add(lblPaths);
+            header = new HeaderBar { Dock = DockStyle.Top, Height = S(88), Logo = LoadAppIcon(128)?.ToBitmap() };
+            btnHelp = Ghost("How it works", Theme.GHelp, (s, e) => ShowHelp(), () => Theme.P.Header);
+            btnMore = Ghost("More", Theme.GMore, (s, e) => moreMenu.Show(btnMore, new Point(btnMore.Width, btnMore.Height + S(4)), ToolStripDropDownDirection.BelowLeft), () => Theme.P.Header);
+            header.Controls.Add(btnHelp);
+            header.Controls.Add(btnMore);
+            header.Resize += (s, e) => LayoutHeader();
 
-            // Mods tab
-            var tabMods = new TabPage("Mods");
-            var info = new Label
+            // Footer action bar
+            footer = new Panel { Dock = DockStyle.Bottom, Height = S(84) };
+            footer.Paint += (s, e) => { using (var pen = new Pen(Theme.P.Border)) e.Graphics.DrawLine(pen, 0, 0, footer.Width, 0); };
+            btnPrimary = new FlatButton { Kind = ButtonKind.Primary, Text = "Combine & Play", Glyph = Theme.GPlay, Background = () => Theme.P.Header };
+            btnPrimary.Click += (s, e) => PrimaryAction();
+            btnCombine = new FlatButton { Kind = ButtonKind.Secondary, Text = "Combine only", Glyph = Theme.GSync, Background = () => Theme.P.Header };
+            btnCombine.Click += (s, e) => Combine(false);
+            btnReport = new FlatButton { Kind = ButtonKind.Ghost, Text = "Report", Glyph = Theme.GDocument, Background = () => Theme.P.Header };
+            btnReport.Click += (s, e) => OpenReport();
+            footerInfo = new TextBlock { AutoHeight = false, TextFont = Theme.Small, Background = () => Theme.P.Header, Color = () => Theme.P.TextMuted };
+            footer.Controls.AddRange(new Control[] { btnPrimary, btnCombine, btnReport, footerInfo });
+            footer.Resize += (s, e) => LayoutFooter();
+
+            // Body: banner, tabs, pages
+            body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(S(24), S(18), S(24), S(12)) };
+            banner = new StatusBanner { Dock = DockStyle.Top };
+            banner.ActionClicked += (s, e) => ChooseGameFolder();
+            tabs = new NavTabs { Dock = DockStyle.Top, Height = S(46) };
+            tabs.Items.AddRange(new[] { "Your mods", "Conflicts", "Activity" });
+            tabs.SelectedChanged += (s, e) => ShowPage(tabs.Selected);
+            content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, S(14), 0, 0) };
+
+            // Page: mods
+            pageMods = new Panel { Dock = DockStyle.Fill };
+            modsIntro = new TextBlock
             {
                 Dock = DockStyle.Top,
-                Height = 48,
-                Padding = new Padding(4, 6, 4, 0),
-                Text = "Checked = the mod is merged. The mod at the top has the highest priority - it wins when two mods change the same value differently. " +
-                       "All other changes of all mods are kept completely. Map-only mods are still enabled directly in the Mod Launcher."
+                Text = "Tick the mods you want to play with. Drag them into order: if two mods change the same setting, the mod higher up wins. " +
+                       "Maps don't need combining - switch them on in the official Mod Launcher."
             };
-            lvMods.Dock = DockStyle.Fill;
-            lvMods.View = View.Details;
-            lvMods.CheckBoxes = true;
-            lvMods.FullRowSelect = true;
-            lvMods.HideSelection = false;
-            lvMods.MultiSelect = false;
-            lvMods.Columns.Add("#", 40);
-            lvMods.Columns.Add("Mod", 300);
-            lvMods.Columns.Add("Type", 170);
-            lvMods.Columns.Add("Workshop ID / folder", 170);
-            lvMods.Columns.Add("Files", 80);
-            lvMods.Columns.Add("In Mod Launcher", 140);
-            lvMods.ItemCheck += LvMods_ItemCheck;
-            lvMods.ItemChecked += (s, e) => { if (!filling) SelectionChanged(); };
+            modsTools = new FlowLayoutPanel { Dock = DockStyle.Top, Height = S(48), WrapContents = false, Padding = new Padding(0, S(6), 0, S(4)) };
+            btnAll = Ghost("Select all", Theme.GSelectAll, (s, e) => SelectAll(true));
+            btnNone = Ghost("Clear selection", Theme.GClear, (s, e) => SelectAll(false));
+            btnFromLauncher = Ghost("Use Mod Launcher selection", Theme.GSync, (s, e) => ImportLauncher());
+            btnRescan = Ghost("Rescan", Theme.GRefresh, (s, e) => Reload(false));
+            modsTools.Controls.AddRange(new Control[] { btnAll, btnNone, btnFromLauncher, btnRescan });
+            modList = new ModListView { Dock = DockStyle.Fill, Subtitle = SubtitleFor, EmptyText = "No mods found. Subscribe to mods in the Steam Workshop, then click Rescan." };
+            modList.Toggled += row => { if (busy) return; row.Sel.Enabled = !row.Sel.Enabled; SaveConfig(); FillMods(row.Sel); ScheduleStatus(); };
+            modList.Moved += MoveMod;
+            modList.MenuRequested += (row, pt) => ShowModMenu(row, pt);
+            pageMods.Controls.Add(modList);
+            pageMods.Controls.Add(Spacer(S(6)));
+            pageMods.Controls.Add(modsTools);
+            pageMods.Controls.Add(modsIntro);
 
-            var side = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 210, FlowDirection = FlowDirection.TopDown, Padding = new Padding(6), WrapContents = false };
-            side.Controls.Add(SideButton("▲  Move up (higher priority)", (s, e) => MoveSelected(-1)));
-            side.Controls.Add(SideButton("▼  Move down (lower priority)", (s, e) => MoveSelected(1)));
-            side.Controls.Add(Spacer());
-            side.Controls.Add(SideButton("Take over from Mod Launcher", (s, e) => ImportLauncher()));
-            side.Controls.Add(SideButton("Select all content mods", (s, e) => SelectAll(true)));
-            side.Controls.Add(SideButton("Clear selection", (s, e) => SelectAll(false)));
-            side.Controls.Add(Spacer());
-            side.Controls.Add(SideButton("Rescan", (s, e) => Reload(false)));
-            side.Controls.Add(SideButton("Open mod folder", (s, e) => OpenSelectedFolder()));
-            side.Controls.Add(SideButton("Open output folder", (s, e) => OpenPath(env?.OutputModDir)));
-            side.Controls.Add(Spacer());
-            side.Controls.Add(SideButton("Remove from Mod Launcher", (s, e) => UnregisterFromLauncher()));
-            tabMods.Controls.Add(lvMods);
-            tabMods.Controls.Add(side);
-            tabMods.Controls.Add(info);
-
-            // Conflicts tab
-            var tabConf = new TabPage("Conflicts");
-            var confInfo = new Label
+            // Page: conflicts
+            pageConflicts = new Panel { Dock = DockStyle.Fill };
+            conflictsIntro = new TextBlock
             {
                 Dock = DockStyle.Top,
-                Height = 40,
-                Padding = new Padding(4, 6, 4, 0),
-                Text = "Real conflicts of the last merge: several mods change the same value differently. By default the mod further up in the list wins. " +
-                       "Use \"Choose winner\" to pick a different mod for a location (then merge again)."
+                Text = "These settings are changed by more than one of your mods, and the game can only use one value. All other changes of these mods are still used. " +
+                       "By default the mod higher in your list wins - click another value to use it instead, then combine again."
             };
-            lvConflicts.Dock = DockStyle.Fill;
-            lvConflicts.View = View.Details;
-            lvConflicts.FullRowSelect = true;
-            lvConflicts.HideSelection = false;
-            lvConflicts.Columns.Add("File", 250);
-            lvConflicts.Columns.Add("Location", 330);
-            lvConflicts.Columns.Add("Variants", 380);
-            lvConflicts.Columns.Add("Winner", 150);
-            lvConflicts.DoubleClick += (s, e) => ChooseWinner();
-            var confSide = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 210, FlowDirection = FlowDirection.TopDown, Padding = new Padding(6), WrapContents = false };
-            confSide.Controls.Add(SideButton("Choose winner ...", (s, e) => ChooseWinner()));
-            confSide.Controls.Add(SideButton("Remove choice", (s, e) => RemoveOverride()));
-            confSide.Controls.Add(SideButton("Remove all choices", (s, e) => { cfg.ConflictOverrides.Clear(); SaveConfig(); FillConflicts(); UpdateStatus(); }));
-            tabConf.Controls.Add(lvConflicts);
-            tabConf.Controls.Add(confSide);
-            tabConf.Controls.Add(confInfo);
+            conflictList = new ConflictListView { Dock = DockStyle.Fill, EmptyText = "None of your selected mods change the same setting differently - every change of every mod is used." };
+            conflictList.OptionClicked += OnConflictOption;
+            pageConflicts.Controls.Add(conflictList);
+            pageConflicts.Controls.Add(Spacer(S(12)));
+            pageConflicts.Controls.Add(conflictsIntro);
 
-            // Log tab
-            var tabLog = new TabPage("Log");
-            txtLog.Dock = DockStyle.Fill;
-            txtLog.Multiline = true;
-            txtLog.ReadOnly = true;
-            txtLog.ScrollBars = ScrollBars.Both;
-            txtLog.WordWrap = false;
-            txtLog.Font = new Font("Consolas", 9f);
-            txtLog.BackColor = Color.White;
-            tabLog.Controls.Add(txtLog);
+            // Page: activity log
+            pageLog = new Panel { Dock = DockStyle.Fill };
+            logTools = new FlowLayoutPanel { Dock = DockStyle.Top, Height = S(44), WrapContents = false };
+            btnCopyLog = Ghost("Copy to clipboard", Theme.GCopy, (s, e) => { if (logBox.TextLength > 0) Clipboard.SetText(logBox.Text); });
+            logTools.Controls.Add(btnCopyLog);
+            logFrame = new Panel { Dock = DockStyle.Fill, Padding = new Padding(S(14), S(12), S(6), S(12)) };
+            logFrame.Paint += (s, e) =>
+            {
+                Theme.Smooth(e.Graphics);
+                var r = new RectangleF(0.5f, 0.5f, logFrame.Width - 1.5f, logFrame.Height - 1.5f);
+                Theme.StrokeRound(e.Graphics, Theme.P.Border, r, S(12));
+            };
+            logFrame.Resize += (s, e) => logFrame.Invalidate();
+            logBox = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, Font = Theme.Mono, WordWrap = true };
+            logBox.HandleCreated += (s, e) => Theme.ApplyNativeTheme(logBox);
+            logFrame.Controls.Add(logBox);
+            pageLog.Controls.Add(logFrame);
+            pageLog.Controls.Add(logTools);
 
-            tabs.Dock = DockStyle.Fill;
-            tabs.TabPages.Add(tabMods);
-            tabs.TabPages.Add(tabConf);
-            tabs.TabPages.Add(tabLog);
+            content.Controls.AddRange(new Control[] { pageMods, pageConflicts, pageLog });
+            body.Controls.Add(content);
+            body.Controls.Add(tabs);
+            body.Controls.Add(Spacer(S(16)));
+            body.Controls.Add(banner);
 
-            // Bottom bar
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 92, Padding = new Padding(10, 6, 10, 8) };
-            lblStatus.Dock = DockStyle.Top;
-            lblStatus.Height = 36;
-            lblStatus.Font = new Font("Segoe UI Semibold", 9.5f);
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
-            buttons.Controls.Add(ActionButton("Merge", (s, e) => RunBuild(false), 150, true));
-            buttons.Controls.Add(ActionButton("Merge && start Mod Launcher", (s, e) => RunBuild(true), 240, true));
-            buttons.Controls.Add(ActionButton("Test run (check game)", (s, e) => RunTest(), 180, false));
-            buttons.Controls.Add(ActionButton("Open report", (s, e) => OpenPath(env?.ReportPath), 120, false));
-            buttons.Controls.Add(ActionButton("Start Mod Launcher", (s, e) => Program.StartLauncher(env, Log), 160, false));
-            progress.Style = ProgressBarStyle.Marquee;
-            progress.Width = 120;
-            progress.Height = 22;
-            progress.Margin = new Padding(12, 10, 0, 0);
-            progress.Visible = false;
-            buttons.Controls.Add(progress);
-            bottom.Controls.Add(buttons);
-            bottom.Controls.Add(lblStatus);
-
-            Controls.Add(tabs);
-            Controls.Add(bottom);
+            Controls.Add(body);
+            Controls.Add(footer);
             Controls.Add(header);
+
+            BuildMenus();
+            busyLocked.AddRange(new Control[] { btnPrimary, btnCombine, btnAll, btnNone, btnFromLauncher, btnRescan, modList, conflictList });
+            ShowPage(0);
         }
 
-        Button SideButton(string text, EventHandler click)
+        static Control Spacer(int h) => new Panel { Dock = DockStyle.Top, Height = h, BackColor = Color.Transparent };
+
+        FlatButton Ghost(string text, string glyph, EventHandler click, Func<Color> background = null)
         {
-            var b = new Button { Text = text, Width = 192, Height = 30, TextAlign = ContentAlignment.MiddleLeft };
+            var b = new FlatButton { Kind = ButtonKind.Ghost, Text = text, Glyph = glyph, Background = background ?? (() => Theme.P.Window) };
+            b.Size = new Size(b.PreferredWidth(), S(36));
+            b.Margin = new Padding(0, 0, S(6), 0);
             b.Click += click;
-            actionButtons.Add(b);
             return b;
         }
 
-        static Control Spacer() => new Label { Height = 10, Width = 10 };
-
-        Button ActionButton(string text, EventHandler click, int width, bool primary)
+        void LayoutHeader()
         {
-            var b = new Button { Text = text, Width = width, Height = 34, Margin = new Padding(0, 4, 8, 0) };
-            if (primary)
+            int y = (header.Height - S(38)) / 2;
+            btnMore.SetBounds(header.Width - S(24) - btnMore.PreferredWidth(), y, btnMore.PreferredWidth(), S(38));
+            btnHelp.SetBounds(btnMore.Left - S(6) - btnHelp.PreferredWidth(), y, btnHelp.PreferredWidth(), S(38));
+        }
+
+        void LayoutFooter()
+        {
+            int h = S(46), y = (footer.Height - h) / 2, x = S(24);
+            btnPrimary.SetBounds(x, y, Math.Max(S(210), btnPrimary.PreferredWidth()), h);
+            x = btnPrimary.Right + S(10);
+            btnCombine.SetBounds(x, y, btnCombine.PreferredWidth(), h);
+            x = btnCombine.Right + S(6);
+            btnReport.SetBounds(x, y, btnReport.PreferredWidth(), h);
+            int infoX = btnReport.Right + S(16);
+            footerInfo.SetBounds(infoX, y + S(13), Math.Max(S(40), footer.Width - infoX - S(24)), S(22));
+        }
+
+        void ShowPage(int i)
+        {
+            pageMods.Visible = i == 0;
+            pageConflicts.Visible = i == 1;
+            pageLog.Visible = i == 2;
+            (i == 0 ? (Control)modList : i == 1 ? conflictList : logBox).Focus();
+        }
+
+        void BuildMenus()
+        {
+            moreMenu = new ContextMenuStrip { Renderer = new MenuRenderer(), ShowImageMargin = true, Font = Theme.Body, ImageScalingSize = new Size(S(20), S(20)) };
+            AddItem(moreMenu, "Test the game", Theme.GTest, (s, e) => RunTest());
+            AddItem(moreMenu, "Rescan mods", Theme.GRefresh, (s, e) => Reload(false));
+            AddItem(moreMenu, "Use the Mod Launcher's selection", Theme.GSync, (s, e) => ImportLauncher());
+            moreMenu.Items.Add(new ToolStripSeparator());
+            AddItem(moreMenu, "Open report", Theme.GDocument, (s, e) => OpenReport());
+            AddItem(moreMenu, "Open the combined mod folder", Theme.GFolder, (s, e) => OpenPath(env?.OutputModDir));
+            AddItem(moreMenu, "Open the Steam Workshop mods folder", Theme.GFolder, (s, e) => OpenPath(env?.WorkshopDir));
+            moreMenu.Items.Add(new ToolStripSeparator());
+            AddItem(moreMenu, "Remove from the Mod Launcher", Theme.GClear, (s, e) => Unregister());
+            moreMenu.Items.Add(new ToolStripSeparator());
+            AddItem(moreMenu, "Read me", Theme.GHelp, (s, e) => OpenPath(Path.Combine(toolDir, "README.txt")));
+            AddItem(moreMenu, "Project page on GitHub", Theme.GGlobe, (s, e) => OpenUrl(ReportWriter.ProjectUrl));
+            modMenu = new ContextMenuStrip { Renderer = new MenuRenderer(), ShowImageMargin = true, Font = Theme.Body, ImageScalingSize = new Size(S(20), S(20)) };
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            switch (keyData)
             {
-                b.BackColor = Color.FromArgb(46, 125, 50);
-                b.ForeColor = Color.White;
-                b.FlatStyle = FlatStyle.Flat;
-                b.FlatAppearance.BorderSize = 0;
-                b.Font = new Font("Segoe UI Semibold", 9.5f);
+                case Keys.Control | Keys.Tab: tabs.Selected = (tabs.Selected + 1) % tabs.Items.Count; return true;
+                case Keys.Control | Keys.Shift | Keys.Tab: tabs.Selected = (tabs.Selected + tabs.Items.Count - 1) % tabs.Items.Count; return true;
+                case Keys.Control | Keys.D1: tabs.Selected = 0; return true;
+                case Keys.Control | Keys.D2: tabs.Selected = 1; return true;
+                case Keys.Control | Keys.D3: tabs.Selected = 2; return true;
+                case Keys.F5: if (!busy) Reload(false); return true;
+                case Keys.F1: ShowHelp(); return true;
             }
-            b.Click += click;
-            actionButtons.Add(b);
-            return b;
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
-        // ---------------- Data ----------------
+        ToolStripMenuItem AddItem(ToolStrip strip, string text, string glyph, EventHandler click)
+        {
+            var item = new ToolStripMenuItem(text, null, click) { Padding = new Padding(0, S(3), 0, S(3)) };
+            strip.Items.Add(item);
+            menuGlyphs.Add((item, glyph));
+            item.Image = MenuRenderer.GlyphImage(glyph, Theme.P.TextMuted, S(20));
+            return item;
+        }
+
+        void ApplyTheme()
+        {
+            var p = Theme.P;
+            BackColor = p.Window;
+            body.BackColor = content.BackColor = pageMods.BackColor = pageConflicts.BackColor = pageLog.BackColor = p.Window;
+            modsTools.BackColor = logTools.BackColor = p.Window;
+            footer.BackColor = p.Header;
+            logFrame.BackColor = p.Input;
+            logBox.BackColor = p.Input;
+            logBox.ForeColor = p.Text;
+            foreach (var m in new[] { moreMenu, modMenu }) { m.BackColor = p.Surface; m.ForeColor = p.Text; }
+            foreach (var (item, glyph) in menuGlyphs) item.Image = MenuRenderer.GlyphImage(glyph, p.TextMuted, S(20));
+            if (IsHandleCreated) { Theme.ApplyTitleBar(this); Theme.ApplyNativeTheme(logBox); }
+            Invalidate(true);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            Theme.ApplyTitleBar(this);
+            Theme.ApplyNativeTheme(logBox);
+        }
+
+        // ================= Data =================
 
         void Reload(bool firstLoad)
         {
@@ -219,14 +281,6 @@ namespace TG3ModLoader.Gui
             {
                 var c0 = ToolConfig.Load(Path.Combine(toolDir, "ModLoader.config.json"));
                 env = GameEnv.Detect(toolDir, c0.GameDir, c0.WorkshopDir);
-                lblPaths.Text = "Game: " + (env.GameFound ? env.GameDir : "NOT FOUND") + "     Workshop: " + (env.WorkshopFound ? env.WorkshopDir : "NOT FOUND") +
-                                "\nOutput mod: " + env.OutputModDir;
-                if (!env.GameFound)
-                {
-                    MessageBox.Show(this, "The Guild 3 was not found.\n\nPlease put the ModLoader folder into the Steam Workshop folder of the game " +
-                                          "(...\\steamapps\\workshop\\content\\311260\\TG3ModLoader) or set \"gameDir\" in ModLoader.config.json.",
-                        "TG3 ModLoader", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
                 var lc = LauncherConfig.Load(GameEnv.LauncherModsYml);
                 catalog = env.WorkshopFound || lc.Entries.Count > 0 ? ModCatalog.Scan(env, lc) : new List<ModInfo>();
                 cfg = c0;
@@ -234,95 +288,106 @@ namespace TG3ModLoader.Gui
                 {
                     int n = cfg.ImportFromLauncher(catalog);
                     SaveConfig();
-                    if (firstLoad) Log("First start: selection and order taken over from the Mod Launcher (" + n + " content mod(s) selected).");
+                    firstStart = firstLoad;
+                    Log("First start: took over the mods that are switched on in the Mod Launcher (" + n + ").");
                 }
                 else cfg.Reconcile(catalog);
+                var man = Builder.ReadManifest(env);
+                last = ReportData.FromManifest(man);
+                lastFingerprint = man?.Str("fingerprint");
+                if (firstLoad) RefreshOutdatedReport();
+                header.Version = "Version " + Builder.ToolVersion;
+                if (firstLoad)
+                {
+                    Log("TG3 ModLoader " + Builder.ToolVersion + " - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+                    Log("Game folder:     " + (env.GameDir ?? "not found"));
+                    Log("Workshop folder: " + (env.WorkshopDir ?? "not found"));
+                }
+                Log(catalog.Count + " mod(s) found, " + SelectedCount + " selected for combining." +
+                    (last == null ? " Not combined yet." : " Last combine: " + last.BuiltAt.ToString("yyyy-MM-dd HH:mm") + "."));
                 FillMods();
-                conflicts = Builder.ConflictsFromManifest(Builder.ReadManifest(env));
                 FillConflicts();
+                statusKnown = false;
                 UpdateStatus();
+                ComputeStatus();
                 if (firstLoad) CheckLauncherState();
             }
             catch (Exception ex)
             {
                 Log("Error while scanning: " + ex);
-                MessageBox.Show(this, ex.Message, "TG3 ModLoader", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ThemedDialog.Show(this, BannerKind.Danger, "Something went wrong", ex.Message);
             }
+        }
+
+        /// <summary>After an update of the ModLoader the report file on disk still has the old layout - write it again.</summary>
+        void RefreshOutdatedReport()
+        {
+            if (last == null) return;
+            try
+            {
+                var report = new FileInfo(env.ReportPath);
+                if (report.Exists && report.LastWriteTimeUtc >= File.GetLastWriteTimeUtc(Application.ExecutablePath)) return;
+                ReportWriter.Write(env.ReportPath, last, env);
+            }
+            catch (Exception ex) { Log("Could not update the report: " + ex.Message); }
         }
 
         void CheckLauncherState()
         {
             var foreign = catalog.Where(m => m.LauncherEnabled && m.Mergeable && !cfg.Mods.Any(s => s.Enabled && s.Id.Equals(m.Id, StringComparison.OrdinalIgnoreCase))).ToList();
             if (foreign.Count == 0) return;
-            var r = MessageBox.Show(this, "The following content mods are enabled in the official Mod Launcher but not merged by the ModLoader yet:\n\n" +
-                                          string.Join("\n", foreign.Select(m => "  • " + m.Name)) +
-                                          "\n\nAdd them to the selection?", "TG3 ModLoader", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var r = ThemedDialog.Show(this, BannerKind.Neutral, "Add the mods from the Mod Launcher?",
+                "These gameplay mods are switched on in the official Mod Launcher but not ticked here. The Mod Launcher can only start them through the ModLoader:",
+                foreign.Select(m => new ThemedDialog.Line(Theme.GCheck, Theme.P.Accent, m.Name)),
+                new ThemedDialog.Choice("Not now", DialogResult.No), new ThemedDialog.Choice("Add them", DialogResult.Yes, ButtonKind.Primary));
             if (r == DialogResult.Yes) ImportLauncher();
         }
 
         ModInfo Info(string id) => catalog.FirstOrDefault(m => m.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
 
-        void FillMods()
+        ModStats StatsFor(string id) => last?.Mods.FirstOrDefault(m => m.Id != null && m.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+        void FillMods(ModSelection keep = null)
         {
-            filling = true;
-            lvMods.BeginUpdate();
-            var selId = lvMods.SelectedItems.Count > 0 ? (lvMods.SelectedItems[0].Tag as ModSelection)?.Id : null;
-            lvMods.Items.Clear();
-            int n = 0;
+            var rows = new List<ModRow>();
             foreach (var s in cfg.Mods)
             {
                 var m = Info(s.Id);
                 if (m == null) continue;
-                var it = new ListViewItem((++n).ToString()) { Tag = s, Checked = s.Enabled && m.Mergeable };
-                it.SubItems.Add(s.Name);
-                it.SubItems.Add(m.Kind == ModKind.Map ? "Map (enable in launcher)" : m.KindText);
-                it.SubItems.Add(m.IsWorkshop ? m.Id : m.Dir);
-                it.SubItems.Add(m.Missing ? "missing" : (m.MediaFiles + m.MapFiles).ToString());
-                it.SubItems.Add(!m.InLauncher ? "-" : m.LauncherEnabled ? "enabled" : "disabled");
-                if (!m.Mergeable) it.ForeColor = Color.Gray;
-                if (m.Missing) it.ForeColor = Color.Firebrick;
-                lvMods.Items.Add(it);
-                if (s.Id == selId) it.Selected = true;
+                rows.Add(new ModRow { Sel = s, Info = m, Stats = StatsFor(s.Id) });
             }
-            lvMods.EndUpdate();
-            filling = false;
+            modList.SetRows(rows, keep ?? modList.SelectedRow?.Sel);
+            int sel = rows.Count(r => r.Checked), total = rows.Count(r => r.CanCheck);
+            footerInfo.Text = total == 0 ? "" : sel + " of " + total + " gameplay mods selected";
         }
 
-        void LvMods_ItemCheck(object sender, ItemCheckEventArgs e)
+        string SubtitleFor(ModRow r)
         {
-            if (filling) return;
-            var s = lvMods.Items[e.Index].Tag as ModSelection;
-            var m = s != null ? Info(s.Id) : null;
-            if (m == null || !m.Mergeable)
-            {
-                e.NewValue = CheckState.Unchecked;
-                if (m != null && m.Kind == ModKind.Map)
-                    Log("'" + m.Name + "' is a map-only mod - enable it directly in the Mod Launcher (maps do not collide).");
-            }
+            if (r.Info.Missing) return "Not downloaded - is it still subscribed in the Steam Workshop?";
+            if (r.Info.Kind == ModKind.Map) return "Map - switch it on in the official Mod Launcher (maps never conflict)";
+            if (r.Info.Kind == ModKind.Empty) return "This mod contains no files";
+            if (!r.Checked) return r.Info.Kind == ModKind.Mixed ? "Map and gameplay changes - tick it to include it" : "Not included - tick it to include it";
+            var st = r.Stats;
+            if (st == null || last == null) return "Included in the next combine";
+            if (!last.Complete) return "Part of your combined mods";
+            var parts = new List<string> { "Changes " + st.ChangedFiles + " game file" + (st.ChangedFiles == 1 ? "" : "s") };
+            int total = st.ConflictsWon + st.ConflictsLost;
+            parts.Add(total == 0 ? "no conflicts" : "wins " + st.ConflictsWon + " of " + total + " conflict" + (total == 1 ? "" : "s"));
+            return string.Join("  ·  ", parts);
         }
 
-        void SelectionChanged()
+        void MoveMod(ModRow row, int newIndex)
         {
-            foreach (ListViewItem it in lvMods.Items)
-                if (it.Tag is ModSelection s) s.Enabled = it.Checked;
+            if (busy) return;
+            var shown = modList.Rows.Select(r => r.Sel).ToList();
+            shown.Remove(row.Sel);
+            shown.Insert(Math.Max(0, Math.Min(shown.Count, newIndex)), row.Sel);
+            var hidden = cfg.Mods.Where(m => !shown.Contains(m)).ToList();
+            cfg.Mods = shown.Concat(hidden).ToList();
             SaveConfig();
-            UpdateStatus();
-        }
-
-        void MoveSelected(int dir)
-        {
-            if (lvMods.SelectedItems.Count == 0) return;
-            var s = lvMods.SelectedItems[0].Tag as ModSelection;
-            int i = cfg.Mods.IndexOf(s);
-            int j = i + dir;
-            // Skip entries that are not shown (unknown mods) to keep the move intuitive.
-            while (j >= 0 && j < cfg.Mods.Count && Info(cfg.Mods[j].Id) == null) j += dir;
-            if (j < 0 || j >= cfg.Mods.Count) return;
-            cfg.Mods.RemoveAt(i);
-            cfg.Mods.Insert(j, s);
-            SaveConfig();
-            FillMods();
-            UpdateStatus();
+            FillMods(row.Sel);
+            FillConflicts();
+            ScheduleStatus();
         }
 
         void SelectAll(bool on)
@@ -334,181 +399,265 @@ namespace TG3ModLoader.Gui
             }
             SaveConfig();
             FillMods();
-            UpdateStatus();
+            ScheduleStatus();
         }
 
         void ImportLauncher()
         {
+            if (busy) return;
             var lc = LauncherConfig.Load(GameEnv.LauncherModsYml);
             catalog = ModCatalog.Scan(env, lc);
             int n = cfg.ImportFromLauncher(catalog);
             SaveConfig();
             FillMods();
-            UpdateStatus();
-            Log(n + " mod(s) taken over from the Mod Launcher, order aligned with the launcher.");
+            FillConflicts();
+            ScheduleStatus();
+            Log(n + " mod(s) taken over from the Mod Launcher; order aligned with the launcher.");
         }
 
         void SaveConfig()
         {
             try { cfg.Save(env.ConfigPath); }
-            catch (Exception ex) { Log("Could not save the configuration: " + ex.Message); }
+            catch (Exception ex) { Log("Could not save the settings: " + ex.Message); }
         }
+
+        // ================= Conflicts =================
 
         void FillConflicts()
         {
-            lvConflicts.BeginUpdate();
-            lvConflicts.Items.Clear();
-            foreach (var c in conflicts)
+            var items = new List<ConflictItem>();
+            if (last != null && last.Success)
             {
-                var it = new ListViewItem(c.File) { Tag = c };
-                it.SubItems.Add(c.Path);
-                it.SubItems.Add(string.Join("  |  ", c.Candidates.Select(x => x.ModName + ": " + x.Text)));
-                string over = null;
-                if (cfg.ConflictOverrides.TryGetValue(c.Id, out var oid))
-                    over = oid.StartsWith(ConflictPolicy.CustomPrefix)
-                        ? "value " + oid.Substring(ConflictPolicy.CustomPrefix.Length) + " (chosen)"
-                        : (cfg.Mods.FirstOrDefault(m => m.Id == oid)?.Name ?? oid) + " (chosen)";
-                it.SubItems.Add(over ?? c.WinnerName);
-                if (over != null || c.ByOverride) it.ForeColor = Color.DarkBlue;
-                lvConflicts.Items.Add(it);
+                foreach (var c in last.Conflicts.OrderBy(c => Friendly.Area(c.File)).ThenBy(c => c.File).ThenBy(c => c.Path))
+                    items.Add(BuildItem(c));
             }
-            lvConflicts.EndUpdate();
-            tabs.TabPages[1].Text = "Conflicts (" + conflicts.Count + ")";
+            conflictList.SetItems(items);
+            tabs.Counts[1] = items.Count;
+            tabs.Attention.Clear();
+            if (items.Any(i => i.Pending)) tabs.Attention.Add(1);
+            tabs.Invalidate();
         }
 
-        /// <summary>Lets the user pick the winning mod, the vanilla value or an own value for a conflict.</summary>
-        void ChooseWinner()
+        ConflictItem BuildItem(Conflict c)
         {
-            if (lvConflicts.SelectedItems.Count == 0) return;
-            var c = (Conflict)lvConflicts.SelectedItems[0].Tag;
-            var mods = c.Candidates.Where(x => x.ModName != "Vanilla")
-                .Select(x => cfg.Mods.FirstOrDefault(m => m.Name == x.ModName)).Where(m => m != null).Distinct().ToList();
-            if (mods.Count == 0) return;
-            // Own values are possible for single values (numbers, strings) - not for whole objects, text hunks or binary files.
-            var vanilla = c.Candidates.FirstOrDefault(x => x.ModName == "Vanilla").Text;
+            var (title, context) = Friendly.Setting(c.Path);
+            var it = new ConflictItem { C = c, Title = title, Context = context, Area = Friendly.Area(c.File) };
+            var vanilla = c.Candidates.FirstOrDefault(x => x.ModName == "Vanilla");
             bool scalar = c.Kind == "value" && c.Candidates.All(x => ConflictPolicy.IsValidScalar(x.Text));
-            cfg.ConflictOverrides.TryGetValue(c.Id, out var current);
-            string currentCustom = current != null && current.StartsWith(ConflictPolicy.CustomPrefix) ? current.Substring(ConflictPolicy.CustomPrefix.Length) : null;
-
-            int rows = mods.Count + (scalar ? 2 : 0);
-            using (var dlg = new Form { Text = "Resolve conflict", Size = new Size(640, 170 + 32 * rows), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, ShowIcon = false, ShowInTaskbar = false, Font = Font })
+            foreach (var cand in c.Candidates.Where(x => x.ModName != "Vanilla"))
             {
-                dlg.Controls.Add(new Label { Text = c.File + "\n" + c.Path, Location = new Point(12, 10), Size = new Size(600, 40) });
-                var radios = new List<RadioButton>();
-                int y = 56;
-                foreach (var m in mods)
+                var sel = cfg.Mods.FirstOrDefault(m => m.Name == cand.ModName);
+                it.Options.Add(new ConflictOption
                 {
-                    var text = c.Candidates.FirstOrDefault(x => x.ModName == m.Name).Text;
-                    var rb = new RadioButton { Text = m.Name + ":  " + text, Tag = m, Location = new Point(16, y), Size = new Size(600, 26), Checked = currentCustom == null && m.Id == c.WinnerId };
-                    radios.Add(rb);
-                    dlg.Controls.Add(rb);
-                    y += 32;
-                }
-                RadioButton rbVanilla = null, rbCustom = null;
-                TextBox txtCustom = null;
-                if (scalar)
-                {
-                    rbVanilla = new RadioButton { Text = "Vanilla (original value):  " + vanilla, Location = new Point(16, y), Size = new Size(600, 26), Checked = currentCustom != null && currentCustom == vanilla };
-                    dlg.Controls.Add(rbVanilla);
-                    y += 32;
-                    rbCustom = new RadioButton { Text = "Own value:", Location = new Point(16, y), Size = new Size(110, 26), Checked = currentCustom != null && currentCustom != vanilla };
-                    txtCustom = new TextBox { Location = new Point(130, y), Width = 300, Text = currentCustom ?? c.Candidates.Last().Text };
-                    txtCustom.TextChanged += (s, e) => rbCustom.Checked = true;
-                    dlg.Controls.Add(rbCustom);
-                    dlg.Controls.Add(txtCustom);
-                    y += 32;
-                }
-                var ok = new Button { Text = "Apply", DialogResult = DialogResult.OK, Location = new Point(410, y + 8), Width = 100 };
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(516, y + 8), Width = 100 };
-                dlg.Controls.Add(ok);
-                dlg.Controls.Add(cancel);
-                dlg.AcceptButton = ok;
-                dlg.CancelButton = cancel;
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-
-                string decision, label;
-                if (rbVanilla != null && rbVanilla.Checked) { decision = ConflictPolicy.CustomPrefix + vanilla; label = "vanilla value " + vanilla; }
-                else if (rbCustom != null && rbCustom.Checked)
-                {
-                    var v = txtCustom.Text.Trim();
-                    if (!ConflictPolicy.IsValidScalar(v))
-                    {
-                        MessageBox.Show(this, "\"" + v + "\" is not a valid single value (use e.g. 25, 0.5 or \"Text\").", "Resolve conflict", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-                    decision = ConflictPolicy.CustomPrefix + v;
-                    label = "own value " + v;
-                }
-                else
-                {
-                    var chosen = radios.FirstOrDefault(r => r.Checked)?.Tag as ModSelection;
-                    if (chosen == null) return;
-                    decision = chosen.Id;
-                    label = chosen.Name;
-                }
-                cfg.ConflictOverrides[c.Id] = decision;
-                SaveConfig();
-                FillConflicts();
-                UpdateStatus();
-                Log("Conflict " + c.Id + ": " + label + " (takes effect after merging again).");
+                    Label = cand.ModName,
+                    ModId = sel?.Id,
+                    Value = c.Kind == "file" ? "own version of the file" : cand.Text == "(removed)" ? "removes it" : Friendly.Value(cand.Text)
+                });
             }
+            if (scalar && vanilla.ModName != null)
+                it.Options.Add(new ConflictOption { Label = "Original game", Value = Friendly.Value(vanilla.Text), RawValue = vanilla.Text, IsVanilla = true });
+            if (scalar) it.Options.Add(new ConflictOption { Label = "Your own value…", Value = "", IsCustom = true });
+
+            // Current choice: a decision of the user, otherwise the mod highest in the current list.
+            cfg.ConflictOverrides.TryGetValue(c.Id, out var decision);
+            ConflictOption chosen = null;
+            if (decision != null && decision.StartsWith(ConflictPolicy.CustomPrefix))
+            {
+                var v = decision.Substring(ConflictPolicy.CustomPrefix.Length);
+                chosen = it.Options.FirstOrDefault(o => o.IsVanilla && o.RawValue != null && o.RawValue.Trim() == v.Trim());
+                if (chosen == null)
+                {
+                    chosen = it.Options.FirstOrDefault(o => o.IsCustom);
+                    if (chosen != null) { chosen.Value = Friendly.Value(v); chosen.Label = "Your own value"; }
+                }
+            }
+            else if (decision != null) chosen = it.Options.FirstOrDefault(o => o.ModId == decision);
+            bool byUser = chosen != null;
+            if (chosen == null) chosen = DefaultWinner(it);
+            if (chosen != null) chosen.Chosen = true;
+            it.Reason = byUser ? "Chosen by you" : chosen != null ? "Used because " + chosen.Label + " is higher in your list" : "";
+
+            // Pending: the current choice differs from what the last combine used.
+            string usedNow = chosen == null ? null : chosen.IsCustom || chosen.IsVanilla ? ConflictPolicy.CustomPrefix + (chosen.IsVanilla ? chosen.RawValue : CustomValue(decision)) : chosen.ModId;
+            string usedThen = c.WinnerId;
+            if (usedThen != null && usedNow != null)
+            {
+                if (usedThen.StartsWith(ConflictPolicy.CustomPrefix) && usedNow.StartsWith(ConflictPolicy.CustomPrefix))
+                    it.Pending = CustomValue(usedThen).Trim() != CustomValue(usedNow).Trim();
+                else it.Pending = usedThen != usedNow;
+            }
+            return it;
         }
 
-        void RemoveOverride()
+        static string CustomValue(string decision) =>
+            decision != null && decision.StartsWith(ConflictPolicy.CustomPrefix) ? decision.Substring(ConflictPolicy.CustomPrefix.Length) : null;
+
+        ConflictOption DefaultWinner(ConflictItem it)
         {
-            if (lvConflicts.SelectedItems.Count == 0) return;
-            var c = (Conflict)lvConflicts.SelectedItems[0].Tag;
-            if (cfg.ConflictOverrides.Remove(c.Id)) { SaveConfig(); FillConflicts(); UpdateStatus(); }
+            foreach (var s in cfg.Mods)
+            {
+                var o = it.Options.FirstOrDefault(x => x.ModId == s.Id && !x.IsVanilla && !x.IsCustom);
+                if (o != null) return o;
+            }
+            return it.Options.FirstOrDefault(o => !o.IsVanilla && !o.IsCustom);
+        }
+
+        void OnConflictOption(ConflictItem it, ConflictOption o)
+        {
+            if (busy) return;
+            string id = it.C.Id;
+            if (o.IsCustom)
+            {
+                var vanilla = it.Options.FirstOrDefault(x => x.IsVanilla);
+                cfg.ConflictOverrides.TryGetValue(id, out var cur);
+                string initial = CustomValue(cur) ?? it.Options.FirstOrDefault(x => x.Chosen)?.Value;
+                var v = ThemedDialog.Ask(this, "Your own value", "Enter the value to use for “" + it.Title + "”." + (vanilla != null ? " The original game uses " + vanilla.Value + "." : ""), initial);
+                if (v == null) return;
+                if (!ConflictPolicy.IsValidScalar(v))
+                {
+                    ThemedDialog.Show(this, BannerKind.Warning, "That doesn't look like a single value", "Please enter one value, for example 25, 0.5 or \"Text\".");
+                    return;
+                }
+                cfg.ConflictOverrides[id] = ConflictPolicy.CustomPrefix + v;
+            }
+            else if (o.IsVanilla) cfg.ConflictOverrides[id] = ConflictPolicy.CustomPrefix + o.RawValue.Trim();
+            else
+            {
+                var def = DefaultWinner(it);
+                if (def != null && def.ModId == o.ModId) cfg.ConflictOverrides.Remove(id);
+                else if (o.ModId != null) cfg.ConflictOverrides[id] = o.ModId;
+            }
+            SaveConfig();
+            FillConflicts();
+            ScheduleStatus();
+        }
+
+        // ================= Status =================
+
+        void ScheduleStatus()
+        {
+            // Until the check is done the old state ("Ready to play") may be wrong.
+            statusKnown = false;
+            statusTimer.Stop();
+            statusTimer.Start();
+            UpdateStatus();
+        }
+
+        void ComputeStatus()
+        {
+            int request = ++statusRequest;
+            var snapshot = cfg.Clone();
+            var e = env;
+            Task.Run(() => { try { return new Builder(e, snapshot, null).CurrentFingerprint(); } catch { return null; } }).ContinueWith(t =>
+            {
+                if (request != statusRequest || IsDisposed) return;
+                upToDate = t.Result != null && t.Result == lastFingerprint;
+                statusKnown = true;
+                UpdateStatus();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        int SelectedCount => cfg?.Mods.Count(s => s.Enabled && (Info(s.Id)?.Mergeable ?? false) && !(Info(s.Id)?.Missing ?? true)) ?? 0;
+
+        bool LauncherEntryReady()
+        {
+            var own = LauncherConfig.Load(GameEnv.LauncherModsYml).FindFolder(env.OutputModDir);
+            return own != null && own.Enabled;
         }
 
         void UpdateStatus()
         {
-            if (env == null || cfg == null) return;
-            var man = Builder.ReadManifest(env);
-            int sel = cfg.Mods.Count(s => s.Enabled && (Info(s.Id)?.Mergeable ?? false));
-            string text;
-            Color color;
-            string fp = null;
-            try { fp = new Builder(env, cfg, null).CurrentFingerprint(); } catch { }
-            if (sel == 0) { text = "No mod selected. Check the mods you want and click \"Merge\"."; color = Color.DimGray; }
-            else if (man == null) { text = sel + " mod(s) selected - not merged yet. Please click \"Merge\"."; color = Color.DarkOrange; }
-            else if (fp != null && man.TryGetValue("fingerprint", out var f) && f as string == fp)
-            {
-                text = "Up to date: " + sel + " mod(s) merged on " + man["builtAt"] + ". Keep \"" + GameEnv.OutputFolderName + "\" enabled in the Mod Launcher and click \"Play\".";
-                color = Color.FromArgb(27, 120, 50);
-            }
-            else { text = "Selection, order or mod files have changed (e.g. a Workshop update) - please merge again."; color = Color.DarkOrange; }
+            if (busy || env == null || cfg == null) return;
+            int sel = SelectedCount;
+            bool ready = statusKnown && upToDate && last != null && sel > 0;
+            btnPrimary.Text = ready ? "Play" : "Combine & Play";
+            btnPrimary.Glyph = Theme.GPlay;
+            btnPrimary.Enabled = env.GameFound && sel > 0;
+            btnCombine.Enabled = env.GameFound && sel > 0;
+            LayoutFooter();
 
+            if (transientTitle != null && DateTime.Now < transientUntil) { banner.Set(BannerKind.Success, transientTitle, transientDetail); return; }
+            transientTitle = null;
+
+            if (!env.GameFound)
+            {
+                banner.Set(BannerKind.Danger, "The Guild 3 was not found",
+                    "Put the TG3ModLoader folder into the Steam Workshop folder of The Guild 3 (...\\steamapps\\workshop\\content\\311260), or choose the game folder.", "Choose game folder");
+                return;
+            }
+            if (sel == 0)
+            {
+                banner.Set(BannerKind.Neutral, firstStart ? "Welcome!" : "Choose your mods", "Tick the mods you want to play with below, then click Combine & Play.");
+                return;
+            }
+            if (!statusKnown) { banner.Set(BannerKind.Neutral, "Checking your mods…", sel + " mod" + (sel == 1 ? "" : "s") + " selected."); return; }
+
+            var notes = new List<string>();
+            if (last != null && last.Warnings.Any(w => w.Contains("syntax error"))) notes.Add("One of your mods contains a small error of its own - see the report.");
             var deployLog = Path.Combine(GameEnv.LauncherDeployDir, "scripts.log");
-            if (File.Exists(deployLog) && new FileInfo(deployLog).Length > 0)
-                text += "\nNote: the last game start through the Mod Launcher produced a scripts.log with messages (" + deployLog + ").";
-            lblStatus.Text = text;
-            lblStatus.ForeColor = color;
+            if (File.Exists(deployLog) && new FileInfo(deployLog).Length > 0) notes.Add("The last game start reported script messages - \"More > Test the game\" checks the combination.");
+            string extra = notes.Count > 0 ? " " + string.Join(" ", notes) : "";
+
+            if (last == null)
+                banner.Set(BannerKind.Warning, "Not combined yet", sel + " mod" + (sel == 1 ? " is" : "s are") + " selected. Click Combine & Play to combine them and start the game." + extra);
+            else if (!upToDate)
+                banner.Set(BannerKind.Warning, "Please combine again",
+                    "Your selection, the order, a conflict choice or a mod update has changed since the last combine. Click Combine & Play to update." + extra);
+            else
+            {
+                int conflicts = last.Conflicts.Count;
+                banner.Set(BannerKind.Success, "Ready to play",
+                    sel + " mod" + (sel == 1 ? " is" : "s are") + " combined" + (conflicts > 0 ? " (" + conflicts + " conflict" + (conflicts == 1 ? "" : "s") + " decided)" : "") +
+                    ". Click Play to open the official Mod Launcher, then click Play there." + extra);
+            }
         }
 
-        // ---------------- Actions ----------------
-
-        void SetBusy(bool b)
+        void SetBusy(bool on, string title = null, string detail = null)
         {
-            busy = b;
-            foreach (var btn in actionButtons) btn.Enabled = !b;
-            lvMods.Enabled = !b;
-            progress.Visible = b;
-            UseWaitCursor = b;
+            busy = on;
+            foreach (var c in busyLocked) c.Enabled = !on;
+            UseWaitCursor = on;
+            if (on) banner.Set(BannerKind.Busy, title, detail);
         }
 
         void Log(string s)
         {
             if (InvokeRequired) { BeginInvoke(new Action<string>(Log), s); return; }
-            txtLog.AppendText(s + Environment.NewLine);
+            logBox.AppendText(s + Environment.NewLine);
+            var progress = busy ? Progress(s) : null;
+            if (progress != null) banner.SetDetail(progress);
+        }
+
+        static string Progress(string line)
+        {
+            if (line.StartsWith("Loading vanilla")) return "Reading the original game files…";
+            var m = Regex.Match(line, @"\.\.\. (\d+)/(\d+) files processed");
+            if (m.Success) return "Combining files (" + m.Groups[1].Value + " of " + m.Groups[2].Value + ")…";
+            if (line.StartsWith("Mods to merge")) return "Looking at your mods…";
+            if (line.StartsWith("Output mod updated")) return "Saving the combined mod…";
+            if (line.StartsWith("Mod Launcher configuration")) return "Preparing the official Mod Launcher…";
+            if (line.StartsWith("Starting:")) return "Starting the game…";
+            if (line.StartsWith("Main menu reached")) return "Main menu reached - closing the game again…";
+            return null;
+        }
+
+        // ================= Actions =================
+
+        void PrimaryAction()
+        {
+            if (busy) return;
+            if (btnPrimary.Text == "Play" && LauncherEntryReady()) StartLauncher();
+            else Combine(true);
         }
 
         bool EnsureLauncherClosed()
         {
             if (!LauncherConfig.LauncherRunning()) return true;
-            var r = MessageBox.Show(this, "The official Mod Launcher is open.\n\nTo enable the merged mod there and disable the individually merged mods, " +
-                                          "the launcher has to be closed. Close it now?\n\n(No = merge without updating the launcher)",
-                "TG3 ModLoader", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            var r = ThemedDialog.Show(this, BannerKind.Neutral, "Close the Mod Launcher?",
+                "The official Mod Launcher is open. The ModLoader has to close it to switch the combined mod on and the single mods off.",
+                new ThemedDialog.Choice("Cancel", DialogResult.Cancel),
+                new ThemedDialog.Choice("Continue without", DialogResult.No),
+                new ThemedDialog.Choice("Close it", DialogResult.Yes, ButtonKind.Primary));
             if (r == DialogResult.Cancel) return false;
             if (r == DialogResult.No) return true;
             foreach (var p in Process.GetProcessesByName("Guild3ModLauncher"))
@@ -523,92 +672,217 @@ namespace TG3ModLoader.Gui
             return true;
         }
 
-        void RunBuild(bool launchAfter)
+        void Combine(bool play)
         {
             if (busy) return;
+            if (SelectedCount == 0 && play) return;
             if (Builder.GameUsesFolder(env.OutputModDir))
             {
-                MessageBox.Show(this, "The Guild 3 is running with the merged mod. Please close the game first.", "TG3 ModLoader", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ThemedDialog.Show(this, BannerKind.Neutral, "The game is running", "The Guild 3 is running with the combined mod. Please close the game first.");
                 return;
             }
             if (!EnsureLauncherClosed()) return;
             SaveConfig();
-            SetBusy(true);
-            tabs.SelectedIndex = 2;
+            SetBusy(true, "Combining your mods…", "This usually takes a few seconds.");
             Log("");
-            Log("=== Merge " + DateTime.Now.ToString("HH:mm:ss") + " ===");
+            Log("=== Combine " + DateTime.Now.ToString("HH:mm:ss") + " ===");
             var builder = new Builder(env, cfg, Log);
             Task.Run(() => builder.Build(false, true)).ContinueWith(t =>
             {
                 SetBusy(false);
-                var r = t.Result;
-                foreach (var w in r.Warnings) Log("Note: " + w);
-                foreach (var v in r.Violations) Log("Verification error: " + v);
-                var lc = LauncherConfig.Load(GameEnv.LauncherModsYml);
-                catalog = ModCatalog.Scan(env, lc);
-                FillMods();
-                conflicts = r.Conflicts;
-                FillConflicts();
-                UpdateStatus();
-                if (!r.Success)
+                if (t.IsFaulted)
                 {
-                    MessageBox.Show(this, "Merge failed:\n\n" + r.Error, "TG3 ModLoader", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    var ex = t.Exception.GetBaseException();
+                    Log("Error: " + ex);
+                    UpdateStatus();
+                    ThemedDialog.Show(this, BannerKind.Danger, "Combining failed", ex.Message + "\n\nThe Activity tab has details.");
                     return;
                 }
-                int merged = r.Files.Count(f => f.Method == "structural" || f.Method == "line");
-                var msg = r.Mods.Count + " mod(s) merged successfully.\n\n" +
-                          "• " + r.Files.Count + " files are changed by mods, " + merged + " of them combined from several mods\n" +
-                          "• " + r.Conflicts.Count + " real conflicts (see the \"Conflicts\" tab)\n" +
-                          "• Verification: " + (r.Violations.Count == 0 ? "every change of every mod is present in the result" : r.Violations.Count + " errors (see log)") +
-                          (r.LauncherUpdated ? "\n\nIn the Mod Launcher, \"" + GameEnv.OutputFolderName + "\" was enabled and the individual mods were disabled." : "") +
-                          (r.Warnings.Count > 0 ? "\n\nNotes:\n" + string.Join("\n", r.Warnings.Take(6).Select(w => "• " + w)) : "");
-                if (launchAfter)
+                var r = t.Result;
+                foreach (var w in r.Warnings) Log("Note: " + w);
+                foreach (var v in r.Violations) Log("Verification: " + v);
+                catalog = ModCatalog.Scan(env, LauncherConfig.Load(GameEnv.LauncherModsYml));
+                var man = Builder.ReadManifest(env);
+                if (r.Success) { last = ReportData.FromManifest(man); lastFingerprint = man?.Str("fingerprint"); upToDate = true; statusKnown = true; }
+                firstStart = false;
+                FillMods();
+                FillConflicts();
+                if (!r.Success)
                 {
-                    Program.StartLauncher(env, Log);
-                    Log(msg);
+                    UpdateStatus();
+                    ThemedDialog.Show(this, BannerKind.Danger, "Combining failed", r.Error + "\n\nYour previous combination is unchanged. The Activity tab has details.");
+                    return;
                 }
-                else MessageBox.Show(this, msg, "TG3 ModLoader", MessageBoxButtons.OK, r.Violations.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                if (play && r.Violations.Count == 0 && StartLauncher())
+                {
+                    transientTitle = "Combined - the Mod Launcher is opening";
+                    transientDetail = "Click Play in the official Mod Launcher to start the game." +
+                                      (r.Conflicts.Count > 0 ? " " + r.Conflicts.Count + " conflict" + (r.Conflicts.Count == 1 ? " was" : "s were") + " decided - see the Conflicts tab." : "");
+                    transientUntil = DateTime.Now.AddSeconds(20);
+                    var clear = new Timer { Interval = 20500 };
+                    clear.Tick += (s, a) => { clear.Stop(); clear.Dispose(); UpdateStatus(); };
+                    clear.Start();
+                    UpdateStatus();
+                    ComputeStatus();
+                    return;
+                }
+                UpdateStatus();
+                ComputeStatus();
+                ShowResult(r);
             }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        void ShowResult(BuildResult r)
+        {
+            var p = Theme.P;
+            int n = r.Mods.Count;
+            var lines = new List<ThemedDialog.Line>
+            {
+                new ThemedDialog.Line(Theme.GCheck, p.Success, n + " mod" + (n == 1 ? " was" : "s were") + " combined into one."),
+                r.Violations.Count == 0
+                    ? new ThemedDialog.Line(Theme.GCheck, p.Success, "Every change of every mod is included.")
+                    : new ThemedDialog.Line(Theme.GWarning, p.Warning, r.Violations.Count + " change(s) could not be confirmed - see the Activity tab."),
+                r.Conflicts.Count == 0
+                    ? new ThemedDialog.Line(Theme.GCheck, p.Success, "No conflicts between your mods.")
+                    : new ThemedDialog.Line(Theme.GInfo, p.Info, r.Conflicts.Count + " setting" + (r.Conflicts.Count == 1 ? " is" : "s are") + " changed by several mods - " +
+                        (r.Conflicts.Any(c => c.ByOverride) ? "your choices and the order of your list decide which value is used." : "the value of the mod higher in your list is used.") +
+                        " See the Conflicts tab.")
+            };
+            if (r.LauncherUpdated) lines.Add(new ThemedDialog.Line(Theme.GCheck, p.Success, "The Mod Launcher is prepared: the combined mod is switched on, the single mods are switched off."));
+            foreach (var w in r.Warnings.Take(3)) lines.Add(new ThemedDialog.Line(Theme.GWarning, p.Warning, Friendly.Warning(w)));
+            var choices = File.Exists(env.LauncherExe)
+                ? new[] { new ThemedDialog.Choice("Close", DialogResult.Cancel), new ThemedDialog.Choice("Play now", DialogResult.OK, ButtonKind.Primary) }
+                : new[] { new ThemedDialog.Choice("Close", DialogResult.Cancel, ButtonKind.Primary) };
+            var res = ThemedDialog.Show(this, r.Violations.Count == 0 ? BannerKind.Success : BannerKind.Warning, "Your mods are combined", null, lines, choices);
+            if (res == DialogResult.OK) StartLauncher();
+        }
+
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+
+        bool StartLauncher()
+        {
+            var running = Process.GetProcessesByName("Guild3ModLauncher").FirstOrDefault(p => p.MainWindowHandle != IntPtr.Zero);
+            if (running != null) { ShowWindow(running.MainWindowHandle, 9); SetForegroundWindow(running.MainWindowHandle); return true; }
+            if (!File.Exists(env.LauncherExe))
+            {
+                ThemedDialog.Show(this, BannerKind.Warning, "Mod Launcher not found", "The official Mod Launcher was not found at:\n" + env.LauncherExe);
+                return false;
+            }
+            Program.StartLauncher(env, Log);
+            return true;
+        }
+
+        void OpenReport()
+        {
+            var d = env == null ? null : ReportData.FromManifest(Builder.ReadManifest(env));
+            if (d == null)
+            {
+                ThemedDialog.Show(this, BannerKind.Neutral, "No report yet", "The report describes your last combination. Combine your mods first.");
+                return;
+            }
+            try
+            {
+                ReportWriter.Write(env.ReportPath, d, env);
+                OpenPath(env.ReportPath);
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, BannerKind.Danger, "The report could not be created", ex.Message); }
         }
 
         void RunTest()
         {
             if (busy) return;
-            if (!Directory.Exists(env.OutputModDir)) { MessageBox.Show(this, "Please merge first.", "TG3 ModLoader"); return; }
-            if (MessageBox.Show(this, "The test run starts The Guild 3 with the merged mod, waits for the main menu, checks for script errors and crashes and closes the game again.\n\nStart now?",
-                    "Test run", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-            SetBusy(true);
-            tabs.SelectedIndex = 2;
+            if (!Directory.Exists(env.OutputModDir)) { ThemedDialog.Show(this, BannerKind.Neutral, "Nothing to test yet", "Combine your mods first."); return; }
+            var ok = ThemedDialog.Show(this, BannerKind.Neutral, "Test the game?",
+                "The ModLoader starts The Guild 3 with your combined mods, waits until the main menu is loaded, checks for script errors and crashes, and closes the game again. This can take a few minutes.",
+                new ThemedDialog.Choice("Cancel", DialogResult.Cancel), new ThemedDialog.Choice("Start test", DialogResult.OK, ButtonKind.Primary));
+            if (ok != DialogResult.OK) return;
+            SetBusy(true, "Testing the game…", "The game starts, loads the main menu and closes again.");
             Log("");
             Log("=== Test run " + DateTime.Now.ToString("HH:mm:ss") + " ===");
             Task.Run(() => TestRun.Run(env, env.OutputModDir, 600, Log)).ContinueWith(t =>
             {
                 SetBusy(false);
+                UpdateStatus();
+                if (t.IsFaulted)
+                {
+                    var ex = t.Exception.GetBaseException();
+                    Log("Error: " + ex);
+                    ThemedDialog.Show(this, BannerKind.Danger, "The test could not run", ex.Message + "\n\nThe Activity tab has details.");
+                    return;
+                }
                 var r = t.Result;
                 Log("Result: " + r.Summary);
-                if (!string.IsNullOrWhiteSpace(r.ScriptsLog)) Log("scripts.log:\n" + r.ScriptsLog);
-                MessageBox.Show(this, r.Summary + (string.IsNullOrWhiteSpace(r.DialogText) ? "" : "\n\nDialog: " + r.DialogText),
-                    "Test run", MessageBoxButtons.OK, r.Ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                if (!string.IsNullOrWhiteSpace(r.ScriptsLog)) Log("scripts.log:" + Environment.NewLine + r.ScriptsLog);
+                if (r.Ok)
+                    ThemedDialog.Show(this, BannerKind.Success, "The game works with your mods",
+                        "The main menu was loaded without script errors or crashes (" + r.SecondsToMenu.ToString("0") + " s).");
+                else
+                    ThemedDialog.Show(this, BannerKind.Warning, "The test found a problem", r.Summary + (string.IsNullOrWhiteSpace(r.DialogText) ? "" : "\n\nMessage of the game: " + r.DialogText) + "\n\nThe Activity tab has details.");
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
-        void UnregisterFromLauncher()
+        void ChooseGameFolder()
+        {
+            using (var d = new FolderBrowserDialog { Description = "Choose the folder of The Guild 3 (the folder that contains Guild3.exe)" })
+            {
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                if (!File.Exists(Path.Combine(d.SelectedPath, "Guild3.exe")))
+                {
+                    ThemedDialog.Show(this, BannerKind.Warning, "Guild3.exe was not found", "Please choose the game folder that contains Guild3.exe.");
+                    return;
+                }
+                var c = ToolConfig.Load(Path.Combine(toolDir, "ModLoader.config.json"));
+                c.GameDir = d.SelectedPath;
+                c.Save(Path.Combine(toolDir, "ModLoader.config.json"));
+                Reload(false);
+            }
+        }
+
+        void Unregister()
         {
             if (busy) return;
-            if (MessageBox.Show(this, "Remove \"" + GameEnv.OutputFolderName + "\" from the official Mod Launcher and re-enable the merged mods there " +
-                                      "(only one script mod, because the launcher cannot load more)?", "TG3 ModLoader", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-            if (!EnsureLauncherClosed()) return;
+            var r = ThemedDialog.Show(this, BannerKind.Neutral, "Remove the ModLoader from the Mod Launcher?",
+                "The combined mod is removed from the official Mod Launcher and your mods are switched on there again (only one gameplay mod, because the Mod Launcher cannot load more).",
+                new ThemedDialog.Choice("Cancel", DialogResult.Cancel), new ThemedDialog.Choice("Remove", DialogResult.OK, ButtonKind.Primary));
+            if (r != DialogResult.OK || !EnsureLauncherClosed()) return;
             bool ok = new Builder(env, cfg, Log).Unregister(out var msg);
             Log(msg);
             Reload(false);
-            MessageBox.Show(this, msg, "TG3 ModLoader", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            ThemedDialog.Show(this, ok ? BannerKind.Success : BannerKind.Warning, ok ? "Removed" : "Not removed", msg);
         }
 
-        void OpenSelectedFolder()
+        void ShowHelp()
         {
-            if (lvMods.SelectedItems.Count == 0) return;
-            var m = Info(((ModSelection)lvMods.SelectedItems[0].Tag).Id);
-            OpenPath(m?.Dir);
+            var p = Theme.P;
+            var res = ThemedDialog.Show(this, BannerKind.Neutral, "How it works",
+                "The official Mod Launcher can only start one gameplay mod at a time. The ModLoader combines all your mods into one, so they work together.",
+                new[]
+                {
+                    new ThemedDialog.Line("", p.Accent, "Tick the mods you want to play with."),
+                    new ThemedDialog.Line(Theme.GUp, p.Accent, "Drag them into order. If two mods change the same setting, the mod higher up wins - or pick the winner yourself on the Conflicts tab."),
+                    new ThemedDialog.Line(Theme.GPlay, p.Accent, "Click Combine & Play. The ModLoader combines your mods, prepares the official Mod Launcher and opens it - just click Play there."),
+                    new ThemedDialog.Line(Theme.GInfo, p.Info, "Maps don't need combining - switch them on in the Mod Launcher."),
+                    new ThemedDialog.Line(Theme.GRefresh, p.Info, "After a mod update in the Steam Workshop, combine again - the ModLoader tells you when.")
+                },
+                new ThemedDialog.Choice("Read the full guide", DialogResult.Retry), new ThemedDialog.Choice("Got it", DialogResult.OK, ButtonKind.Primary));
+            if (res == DialogResult.Retry) OpenPath(Path.Combine(toolDir, "README.txt"));
+        }
+
+        void ShowModMenu(ModRow row, Point pt)
+        {
+            var old = modMenu.Items.Cast<ToolStripItem>().ToList();
+            modMenu.Items.Clear();
+            menuGlyphs.RemoveAll(x => x.Item.Owner == null);
+            foreach (var item in old) { item.Image?.Dispose(); item.Dispose(); }
+            AddItem(modMenu, row.Checked ? "Don't include" : "Include", Theme.GCheck, (s, e) => { if (row.CanCheck) { row.Sel.Enabled = !row.Sel.Enabled; SaveConfig(); FillMods(row.Sel); ScheduleStatus(); } }).Enabled = row.CanCheck && !busy;
+            AddItem(modMenu, "Move to top", Theme.GUp, (s, e) => MoveMod(row, 0)).Enabled = !busy;
+            AddItem(modMenu, "Move to bottom", Theme.GDown, (s, e) => MoveMod(row, modList.Rows.Count - 1)).Enabled = !busy;
+            modMenu.Items.Add(new ToolStripSeparator());
+            AddItem(modMenu, "Open mod folder", Theme.GFolder, (s, e) => OpenPath(row.Info.Dir)).Enabled = row.Info.Dir != null && Directory.Exists(row.Info.Dir);
+            if (row.Info.IsWorkshop && row.Info.Id.All(char.IsDigit))
+                AddItem(modMenu, "Open the Steam Workshop page", Theme.GGlobe, (s, e) => OpenUrl("https://steamcommunity.com/sharedfiles/filedetails/?id=" + row.Info.Id));
+            modMenu.Show(modList, pt);
         }
 
         void OpenPath(string p)
@@ -618,8 +892,27 @@ namespace TG3ModLoader.Gui
             catch (Exception ex) { Log(ex.Message); }
         }
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        void OpenUrl(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch (Exception ex) { Log(ex.Message); }
+        }
+
+        // ================= Icon (also fixes the taskbar icon) =================
+
+        static Icon LoadAppIcon(int size)
+        {
+            try
+            {
+                using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("TG3ModLoader.app.ico"))
+                    if (s != null) return new Icon(s, size, size);
+            }
+            catch { }
+            try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { return null; }
+        }
+
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         Icon taskbarBig, taskbarSmall;
 
         /// <summary>
@@ -637,11 +930,12 @@ namespace TG3ModLoader.Gui
 
         void ApplyTaskbarIcon()
         {
-            if (Icon == null || !IsHandleCreated) return;
+            if (!IsHandleCreated) return;
             if (taskbarBig == null)
             {
-                taskbarBig = new Icon(Icon, SystemInformation.IconSize);
-                taskbarSmall = new Icon(Icon, SystemInformation.SmallIconSize);
+                taskbarBig = LoadAppIcon(SystemInformation.IconSize.Width);
+                taskbarSmall = LoadAppIcon(SystemInformation.SmallIconSize.Width);
+                if (taskbarBig == null || taskbarSmall == null) return;
             }
             const int WM_SETICON = 0x80;
             SendMessage(Handle, WM_SETICON, (IntPtr)1, taskbarBig.Handle);
@@ -650,8 +944,40 @@ namespace TG3ModLoader.Gui
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (busy && MessageBox.Show(this, "An operation is still running. Exit anyway?", "TG3 ModLoader", MessageBoxButtons.YesNo) != DialogResult.Yes) e.Cancel = true;
+            if (busy && ThemedDialog.Show(this, BannerKind.Warning, "Still working", "The ModLoader is still busy. Close it anyway?",
+                    new ThemedDialog.Choice("Keep open", DialogResult.Cancel), new ThemedDialog.Choice("Close", DialogResult.OK, ButtonKind.Primary)) != DialogResult.OK)
+                e.Cancel = true;
             base.OnFormClosing(e);
+        }
+
+        /// <summary>Header with the program icon, the name and a short description.</summary>
+        sealed class HeaderBar : Painted
+        {
+            public Bitmap Logo;
+            public string Version = "";
+
+            public HeaderBar() { Background = () => Theme.P.Header; }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                Theme.Smooth(g);
+                var p = Theme.P;
+                int x = S(24);
+                if (Logo != null)
+                {
+                    int sz = S(52);
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(Logo, new Rectangle(x, (Height - sz) / 2, sz, sz));
+                    x += sz + S(16);
+                }
+                int mid = Height / 2;
+                TextRenderer.DrawText(g, "TG3 ModLoader", Theme.Title, new Rectangle(x, mid - S(28), Width / 2, S(32)), p.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, "Play several mods for The Guild 3 together", Theme.Body, new Rectangle(x + S(1), mid + S(4), Width / 2, S(22)), p.TextMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                int tw = Measure("TG3 ModLoader", Theme.Title);
+                TextRenderer.DrawText(g, Version, Theme.Small, new Rectangle(x + tw + S(8), mid - S(22), S(120), S(24)), p.TextFaint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                using (var pen = new Pen(p.Border)) g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
+            }
         }
     }
 }

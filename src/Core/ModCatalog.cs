@@ -69,7 +69,7 @@ namespace TG3ModLoader.Core
                 ModInfo m;
                 if (e.IsFolder)
                 {
-                    if (e.Key == ownOutput) continue;
+                    if (e.Key == ownOutput || IsModLoaderOutput(e.Name)) continue;
                     if (!mods.TryGetValue(e.Key, out m))
                     {
                         m = Directory.Exists(e.Name) ? Inspect(e.Name) : new ModInfo { Dir = e.Name, Missing = true, Kind = ModKind.Empty };
@@ -93,6 +93,18 @@ namespace TG3ModLoader.Core
                 m.LauncherIndex = Math.Min(m.LauncherIndex, i);
             }
             return mods.Values.OrderBy(m => m.LauncherIndex).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>The combined mod of another copy of the ModLoader: never offered (or merged) as a mod of its own.</summary>
+        public static bool IsModLoaderOutput(string folder)
+        {
+            try
+            {
+                var dir = (folder ?? "").TrimEnd('\\', '/');
+                return Path.GetFileName(dir).Equals(GameEnv.OutputFolderName, StringComparison.OrdinalIgnoreCase)
+                       && File.Exists(Path.Combine(Path.GetDirectoryName(dir) ?? "", "TG3ModLoader.exe"));
+            }
+            catch { return false; }
         }
 
         public static ModInfo Inspect(string dir)

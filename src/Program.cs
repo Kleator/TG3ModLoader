@@ -71,6 +71,16 @@ namespace TG3ModLoader
                         return 0;
                     case "analyze":
                         return Analyze(env, Log);
+                    case "report":
+                        {
+                            // Writes the report of the last combine again, with the current layout (like the Report button).
+                            var data = ReportData.FromManifest(Builder.ReadManifest(env));
+                            if (data == null) { Log("Not combined yet - there is no report."); return 1; }
+                            var path = opts.TryGetValue("out", out var o) && o.Length > 0 ? o : env.ReportPath;
+                            ReportWriter.Write(path, data, env);
+                            Log("Report written: " + path);
+                            return 0;
+                        }
                     case "unregister":
                         {
                             bool ok = new Builder(env, LoadConfig(env), Log).Unregister(out var msg);
@@ -108,6 +118,7 @@ namespace TG3ModLoader
                         Log("                        start the game with the mod and check for script errors");
                         Log("  resolve \"<file>::<path>\" <modId | =value | clear>");
                         Log("                        decide a real conflict (winning mod or own value)");
+                        Log("  report [--out F]      write the report of the last combine again");
                         Log("  unregister            remove the merged mod from the Mod Launcher again");
                         Log("  launch                start the official Mod Launcher");
                         Log("Global options: --gamedir <path>  --workshopdir <path>");
