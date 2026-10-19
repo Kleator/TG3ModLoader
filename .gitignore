@@ -1,0 +1,11 @@
+build/
+bin/
+obj/
+release/
+*.zip
+*.user
+.vs/
+.claude/
+
+# Local working notes - not part of the mod
+prompt.md
