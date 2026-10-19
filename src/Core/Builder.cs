@@ -52,7 +52,7 @@ namespace TG3ModLoader.Core
     /// <summary>Builds the merged mod from the selected mods and vanilla.</summary>
     public sealed class Builder
     {
-        public const string ToolVersion = "1.1.1";
+        public const string ToolVersion = "1.1.2";
         /// <summary>Version of the merge logic. Only a change here (not a cosmetic release) requires merging again.</summary>
         const string MergeEngineVersion = "1.1.0";
 

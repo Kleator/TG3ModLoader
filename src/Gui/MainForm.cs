@@ -40,9 +40,25 @@ namespace TG3ModLoader.Gui
             Size = new Size(1180, 760);
             MinimumSize = new Size(900, 560);
             StartPosition = FormStartPosition.CenterScreen;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            Icon = LoadAppIcon();
             BuildLayout();
             Load += (s, e) => Reload(true);
+        }
+
+        /// <summary>
+        /// The multi-size program icon. The taskbar needs a real small icon (16/24 px) - a single 32 px icon
+        /// (as returned by ExtractAssociatedIcon) is not taken over by the Windows 11 taskbar.
+        /// </summary>
+        static Icon LoadAppIcon()
+        {
+            try
+            {
+                using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("TG3ModLoader.app.ico"))
+                    if (s != null) return new Icon(s);
+            }
+            catch { }
+            try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { return null; }
         }
 
         // ---------------- Layout ----------------
@@ -600,6 +616,36 @@ namespace TG3ModLoader.Gui
             if (string.IsNullOrEmpty(p) || (!File.Exists(p) && !Directory.Exists(p))) { Log("Does not exist: " + p); return; }
             try { Process.Start(new ProcessStartInfo(p) { UseShellExecute = true }); }
             catch (Exception ex) { Log(ex.Message); }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        Icon taskbarBig, taskbarSmall;
+
+        /// <summary>
+        /// The Windows 11 taskbar keeps a generic icon for a new window and only picks up an icon that is set
+        /// after the window became visible - so the icon is sent again once the window is shown.
+        /// </summary>
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyTaskbarIcon();
+            var t = new Timer { Interval = 1000 };
+            t.Tick += (s, a) => { t.Stop(); t.Dispose(); ApplyTaskbarIcon(); };
+            t.Start();
+        }
+
+        void ApplyTaskbarIcon()
+        {
+            if (Icon == null || !IsHandleCreated) return;
+            if (taskbarBig == null)
+            {
+                taskbarBig = new Icon(Icon, SystemInformation.IconSize);
+                taskbarSmall = new Icon(Icon, SystemInformation.SmallIconSize);
+            }
+            const int WM_SETICON = 0x80;
+            SendMessage(Handle, WM_SETICON, (IntPtr)1, taskbarBig.Handle);
+            SendMessage(Handle, WM_SETICON, (IntPtr)0, taskbarSmall.Handle);
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

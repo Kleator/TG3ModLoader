@@ -8,7 +8,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>TG3ModLoader</AssemblyName>
     <RootNamespace>TG3ModLoader</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyTitle>TG3 ModLoader</AssemblyTitle>
     <Product>TG3 ModLoader</Product>
@@ -20,6 +20,10 @@
     <SatelliteResourceLanguages>none</SatelliteResourceLanguages>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" LogicalName="TG3ModLoader.app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="System.IO.Compression" />

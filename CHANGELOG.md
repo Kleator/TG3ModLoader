@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 - 2026-10-19
+
+- Fixed: the Windows taskbar showed a generic program icon instead of the ModLoader icon. The window
+  now uses the full multi-size icon and sets it again once it is visible, which the Windows 11
+  taskbar needs to pick it up.
+
 ## 1.1.1 - 2026-10-19
 
 - Program icon (window, taskbar and `TG3ModLoader.exe`); small sizes show the gear emblem only.
