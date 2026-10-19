@@ -37,15 +37,17 @@ namespace TG3ModLoader
             }
 
             var opts = ParseArgs(args, out var cmd);
-            var cfg0 = ToolConfig.Load(Path.Combine(toolDir, "ModLoader.config.json"));
-            var env = GameEnv.Detect(opts.TryGetValue("tooldir", out var td) ? td : toolDir,
+            if (opts.TryGetValue("tooldir", out var td) && td.Length > 0) toolDir = td;
+            var cfg0 = ToolConfig.Load(Path.Combine(GameEnv.DataDirFor(toolDir), "ModLoader.config.json"));
+            var env = GameEnv.Detect(toolDir,
                 opts.TryGetValue("gamedir", out var gd) ? gd : cfg0.GameDir,
                 opts.TryGetValue("workshopdir", out var wd) ? wd : cfg0.WorkshopDir);
-            try { logFile = new StreamWriter(env.LogPath, false, new UTF8Encoding(false)); } catch { }
+            try { env.EnsureDataDir(); logFile = new StreamWriter(env.LogPath, false, new UTF8Encoding(false)); } catch { }
             Log("TG3 ModLoader " + Builder.ToolVersion + " - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             Log("Game:     " + (env.GameDir ?? "(not found)"));
             Log("Workshop: " + (env.WorkshopDir ?? "(not found)"));
             Log("Output:   " + env.OutputModDir);
+            if (env.InstalledFromWorkshop) Log("Program:  " + env.ToolDir + " (Steam Workshop item " + env.WorkshopItemId + ")");
             Log("");
             if (!env.GameFound) { Log("ERROR: The Guild 3 was not found. Specify it with --gamedir <path>."); return 2; }
 

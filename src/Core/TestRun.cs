@@ -133,7 +133,7 @@ namespace TG3ModLoader.Core
                 res.ScriptsLog = File.ReadAllText(scriptsLog);
                 try
                 {
-                    var keep = Path.Combine(env.ToolDir, "testrun_scripts.log");
+                    var keep = Path.Combine(env.DataDir, "testrun_scripts.log");
                     File.Copy(scriptsLog, keep, true);
                     File.Delete(scriptsLog);
                 }

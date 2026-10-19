@@ -55,6 +55,7 @@ namespace TG3ModLoader.Core
                 {
                     var name = Path.GetFileName(dir);
                     if (!name.All(char.IsDigit)) continue;
+                    if (GameEnv.IsModLoaderFolder(dir)) continue; // the ModLoader itself, subscribed in the Workshop
                     var m = Inspect(dir);
                     m.Id = name;
                     m.Name = name;
@@ -69,7 +70,7 @@ namespace TG3ModLoader.Core
                 ModInfo m;
                 if (e.IsFolder)
                 {
-                    if (e.Key == ownOutput || IsModLoaderOutput(e.Name)) continue;
+                    if (e.Key == ownOutput || IsModLoaderOutput(e.Name) || GameEnv.IsModLoaderFolder(e.Name)) continue;
                     if (!mods.TryGetValue(e.Key, out m))
                     {
                         m = Directory.Exists(e.Name) ? Inspect(e.Name) : new ModInfo { Dir = e.Name, Missing = true, Kind = ModKind.Empty };
@@ -81,6 +82,7 @@ namespace TG3ModLoader.Core
                 else
                 {
                     var id = e.Id.ToString(CultureInfo.InvariantCulture);
+                    if (IsModLoaderItem(env, id)) continue;
                     if (!mods.TryGetValue(id, out m))
                     {
                         m = new ModInfo { Id = id, Dir = null, Missing = true, Kind = ModKind.Empty, IsWorkshop = true };
@@ -95,14 +97,22 @@ namespace TG3ModLoader.Core
             return mods.Values.OrderBy(m => m.LauncherIndex).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        /// <summary>The combined mod of another copy of the ModLoader: never offered (or merged) as a mod of its own.</summary>
+        /// <summary>The Workshop item of the ModLoader program itself (this copy or another subscribed one).</summary>
+        public static bool IsModLoaderItem(GameEnv env, string id) =>
+            id == env.WorkshopItemId || (env.WorkshopFound && GameEnv.IsModLoaderFolder(Path.Combine(env.WorkshopDir, id)));
+
+        /// <summary>
+        /// The combined mod of another copy of the ModLoader: never offered (or merged) as a mod of its own. It sits next to
+        /// the program (manual installation) or next to the ModLoader's settings (data folder of a Workshop copy).
+        /// </summary>
         public static bool IsModLoaderOutput(string folder)
         {
             try
             {
                 var dir = (folder ?? "").TrimEnd('\\', '/');
-                return Path.GetFileName(dir).Equals(GameEnv.OutputFolderName, StringComparison.OrdinalIgnoreCase)
-                       && File.Exists(Path.Combine(Path.GetDirectoryName(dir) ?? "", "TG3ModLoader.exe"));
+                if (!Path.GetFileName(dir).Equals(GameEnv.OutputFolderName, StringComparison.OrdinalIgnoreCase)) return false;
+                var parent = Path.GetDirectoryName(dir) ?? "";
+                return GameEnv.IsModLoaderFolder(parent) || File.Exists(Path.Combine(parent, "build_manifest.json")) || File.Exists(Path.Combine(parent, "ModLoader.config.json"));
             }
             catch { return false; }
         }

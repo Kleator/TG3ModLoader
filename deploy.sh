@@ -13,5 +13,7 @@ if [ -z "$TARGET" ]; then
 fi
 mkdir -p "$TARGET"
 cp "$ROOT/build/TG3ModLoader.exe" "$ROOT/build/TG3ModLoader.exe.config" "$TARGET/"
-cp "$ROOT/README.txt" "$TARGET/"
+cp "$ROOT/README.txt" "$TARGET/TG3ModLoader-README.txt"
+cp "$ROOT/LICENSE" "$TARGET/TG3ModLoader-LICENSE.txt"
+rm -f "$TARGET/README.txt"   # renamed in 1.3.0 (unique names: Workshop items share one folder in the launcher)
 echo "Deployed to $TARGET"

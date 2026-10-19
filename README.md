@@ -10,11 +10,19 @@ Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
+**Steam Workshop:** subscribe to *TG3 ModLoader* in the Workshop of The Guild 3. Start it from the
+official Mod Launcher (select *TG3 ModLoader*, click **Mod files**, double-click `TG3ModLoader.exe`);
+on the first start it offers a desktop shortcut. A Workshop copy keeps its settings and the combined
+mod in `...\steamapps\workshop\content\311260\TG3ModLoader\`, because Steam replaces the item's
+own folder on every update.
+
+**Manual:**
+
 1. Download `TG3ModLoader-<version>.zip` from the [Releases](https://github.com/Kleator/TG3ModLoader/releases) page.
 2. Extract it into the Steam Workshop folder of the game, so that the program ends up at
    `...\steamapps\workshop\content\311260\TG3ModLoader\TG3ModLoader.exe`
    (`311260` is the Steam app id of The Guild 3; the folder sits next to the numbered folders of
-   your subscribed mods).
+   your subscribed mods). A manual and a Workshop copy share their settings.
 3. Start `TG3ModLoader.exe`, tick the mods you want, drag them into order (the mod at the top wins
    when two mods change the same setting) and click **Combine & Play**. The official Mod Launcher
    opens - click **Play** there.
@@ -126,6 +134,8 @@ src/
   Gui/MainForm.cs              main window
   Program.cs                   entry point and command line
 deploy.sh                      build + copy into the Workshop folder
+workshop/prepare_upload.ps1    prepares the Steam Workshop upload (official uploader of the game)
+workshop/description.txt       Steam Workshop description (BBCode)
 ```
 
 ## Building
@@ -138,6 +148,21 @@ Windows 10/11 machine without installing anything.
 sh deploy.sh                                   # build only (output in build/)
 sh deploy.sh "<steamapps>/workshop/content/311260/TG3ModLoader"   # build and install
 ```
+
+## Publishing to the Steam Workshop
+
+```powershell
+powershell -ExecutionPolicy Bypass -File workshop\prepare_upload.ps1
+```
+
+builds the program and creates `workshop\upload\` in the layout of the Mod Launcher's "Create new
+mod": `content\` (exe, config, `TG3ModLoader-README.txt`, `TG3ModLoader-LICENSE.txt`), a square
+`preview.jpg` below the 1 MB limit, and the game's own `Guild3ModUploader.exe` with `steam_api.dll`
+and `steam_appid.txt`. The first upload is `publish_mod.bat` (the item starts as visible only to
+you); the uploader then writes `update_mod.bat`. For later versions run the script again (it keeps
+the item id and adds `--changenote`, see `-ChangeNote`) and double-click `update_mod.bat`. Title,
+description, visibility and screenshots are edited on the item's Workshop page; the description is
+in [workshop/description.txt](workshop/description.txt).
 
 ## Command line
 

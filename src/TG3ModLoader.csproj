@@ -8,7 +8,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>TG3ModLoader</AssemblyName>
     <RootNamespace>TG3ModLoader</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyTitle>TG3 ModLoader</AssemblyTitle>
     <Product>TG3 ModLoader</Product>

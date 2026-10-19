@@ -21,6 +21,8 @@ namespace TG3ModLoader.Core
         public string WorkshopDir;
         public bool UpdateLauncherConfig = true;
         public bool IncludeMapsOfMixedMods = true;
+        /// <summary>The desktop shortcut was offered once (Workshop copies only).</summary>
+        public bool ShortcutOffered;
         /// <summary>Priority order: the first entry has the highest priority and wins real conflicts.</summary>
         public List<ModSelection> Mods = new List<ModSelection>();
         /// <summary>"file::path" -> mod id that should win this conflict.</summary>
@@ -38,6 +40,7 @@ namespace TG3ModLoader.Core
             c.WorkshopDir = d.Str("workshopDir");
             c.UpdateLauncherConfig = d.Bool("updateLauncherConfig", true);
             c.IncludeMapsOfMixedMods = d.Bool("includeMapsOfMixedMods", true);
+            c.ShortcutOffered = d.Bool("shortcutOffered", false);
             if (d.TryGetValue("mods", out var mv) && mv is List<object> ml)
                 foreach (var o in ml.OfType<Dictionary<string, object>>())
                 {
@@ -59,9 +62,11 @@ namespace TG3ModLoader.Core
                 ["workshopDir"] = WorkshopDir,
                 ["updateLauncherConfig"] = UpdateLauncherConfig,
                 ["includeMapsOfMixedMods"] = IncludeMapsOfMixedMods,
+                ["shortcutOffered"] = ShortcutOffered,
                 ["mods"] = Mods.Select(m => (object)new Dictionary<string, object> { ["id"] = m.Id, ["name"] = m.Name, ["enabled"] = m.Enabled }).ToList(),
                 ["conflictOverrides"] = ConflictOverrides.ToDictionary(kv => kv.Key, kv => (object)kv.Value)
             };
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
             File.WriteAllText(path, Json.Write(d), new UTF8Encoding(false));
             Exists = true;
         }
@@ -73,6 +78,7 @@ namespace TG3ModLoader.Core
             WorkshopDir = WorkshopDir,
             UpdateLauncherConfig = UpdateLauncherConfig,
             IncludeMapsOfMixedMods = IncludeMapsOfMixedMods,
+            ShortcutOffered = ShortcutOffered,
             Mods = Mods.Select(m => new ModSelection { Id = m.Id, Name = m.Name, Enabled = m.Enabled }).ToList(),
             ConflictOverrides = new Dictionary<string, string>(ConflictOverrides, StringComparer.Ordinal),
             Exists = Exists

@@ -221,7 +221,9 @@ namespace TG3ModLoader.Gui
             moreMenu.Items.Add(new ToolStripSeparator());
             AddItem(moreMenu, "Remove from the Mod Launcher", Theme.GClear, (s, e) => Unregister());
             moreMenu.Items.Add(new ToolStripSeparator());
-            AddItem(moreMenu, "Read me", Theme.GHelp, (s, e) => OpenPath(Path.Combine(toolDir, "README.txt")));
+            AddItem(moreMenu, "Create a desktop shortcut", Theme.GLink, (s, e) => CreateShortcut(true));
+            moreMenu.Items.Add(new ToolStripSeparator());
+            AddItem(moreMenu, "Read me", Theme.GHelp, (s, e) => OpenReadme());
             AddItem(moreMenu, "Project page on GitHub", Theme.GGlobe, (s, e) => OpenUrl(ReportWriter.ProjectUrl));
             modMenu = new ContextMenuStrip { Renderer = new MenuRenderer(), ShowImageMargin = true, Font = Theme.Body, ImageScalingSize = new Size(S(20), S(20)) };
         }
@@ -279,7 +281,7 @@ namespace TG3ModLoader.Gui
         {
             try
             {
-                var c0 = ToolConfig.Load(Path.Combine(toolDir, "ModLoader.config.json"));
+                var c0 = ToolConfig.Load(Path.Combine(GameEnv.DataDirFor(toolDir), "ModLoader.config.json"));
                 env = GameEnv.Detect(toolDir, c0.GameDir, c0.WorkshopDir);
                 var lc = LauncherConfig.Load(GameEnv.LauncherModsYml);
                 catalog = env.WorkshopFound || lc.Entries.Count > 0 ? ModCatalog.Scan(env, lc) : new List<ModInfo>();
@@ -302,6 +304,7 @@ namespace TG3ModLoader.Gui
                     Log("TG3 ModLoader " + Builder.ToolVersion + " - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
                     Log("Game folder:     " + (env.GameDir ?? "not found"));
                     Log("Workshop folder: " + (env.WorkshopDir ?? "not found"));
+                    if (env.InstalledFromWorkshop) Log("Settings and the combined mod: " + env.DataDir + " (this copy is Steam Workshop item " + env.WorkshopItemId + ")");
                 }
                 Log(catalog.Count + " mod(s) found, " + SelectedCount + " selected for combining." +
                     (last == null ? " Not combined yet." : " Last combine: " + last.BuiltAt.ToString("yyyy-MM-dd HH:mm") + "."));
@@ -310,7 +313,7 @@ namespace TG3ModLoader.Gui
                 statusKnown = false;
                 UpdateStatus();
                 ComputeStatus();
-                if (firstLoad) CheckLauncherState();
+                if (firstLoad) { CheckLauncherState(); OfferShortcut(); }
             }
             catch (Exception ex)
             {
@@ -832,9 +835,10 @@ namespace TG3ModLoader.Gui
                     ThemedDialog.Show(this, BannerKind.Warning, "Guild3.exe was not found", "Please choose the game folder that contains Guild3.exe.");
                     return;
                 }
-                var c = ToolConfig.Load(Path.Combine(toolDir, "ModLoader.config.json"));
+                var path = Path.Combine(GameEnv.DataDirFor(toolDir), "ModLoader.config.json");
+                var c = ToolConfig.Load(path);
                 c.GameDir = d.SelectedPath;
-                c.Save(Path.Combine(toolDir, "ModLoader.config.json"));
+                c.Save(path);
                 Reload(false);
             }
         }
@@ -866,7 +870,7 @@ namespace TG3ModLoader.Gui
                     new ThemedDialog.Line(Theme.GRefresh, p.Info, "After a mod update in the Steam Workshop, combine again - the ModLoader tells you when.")
                 },
                 new ThemedDialog.Choice("Read the full guide", DialogResult.Retry), new ThemedDialog.Choice("Got it", DialogResult.OK, ButtonKind.Primary));
-            if (res == DialogResult.Retry) OpenPath(Path.Combine(toolDir, "README.txt"));
+            if (res == DialogResult.Retry) OpenReadme();
         }
 
         void ShowModMenu(ModRow row, Point pt)
@@ -883,6 +887,45 @@ namespace TG3ModLoader.Gui
             if (row.Info.IsWorkshop && row.Info.Id.All(char.IsDigit))
                 AddItem(modMenu, "Open the Steam Workshop page", Theme.GGlobe, (s, e) => OpenUrl("https://steamcommunity.com/sharedfiles/filedetails/?id=" + row.Info.Id));
             modMenu.Show(modList, pt);
+        }
+
+        void OpenReadme()
+        {
+            foreach (var name in new[] { "TG3ModLoader-README.txt", "README.txt" })
+            {
+                var p = Path.Combine(toolDir, name);
+                if (File.Exists(p)) { OpenPath(p); return; }
+            }
+            OpenUrl(ReportWriter.ProjectUrl);
+        }
+
+        /// <summary>A copy from the Steam Workshop sits deep inside the Steam folder - offer a desktop shortcut once.</summary>
+        void OfferShortcut()
+        {
+            if (!env.InstalledFromWorkshop || cfg.ShortcutOffered) return;
+            cfg.ShortcutOffered = true;
+            SaveConfig();
+            if (File.Exists(ShellShortcut.DesktopPath("TG3 ModLoader"))) return;
+            var r = ThemedDialog.Show(this, BannerKind.Neutral, "Create a desktop shortcut?",
+                "You got the ModLoader from the Steam Workshop, so it lives deep inside the Steam folder. With a shortcut on your desktop you can start it with a double-click. (You can also do this later under More.)",
+                new ThemedDialog.Choice("No, thanks", DialogResult.No), new ThemedDialog.Choice("Create shortcut", DialogResult.Yes, ButtonKind.Primary));
+            if (r == DialogResult.Yes) CreateShortcut(false);
+        }
+
+        void CreateShortcut(bool confirm)
+        {
+            var lnk = ShellShortcut.DesktopPath("TG3 ModLoader");
+            try
+            {
+                ShellShortcut.Create(lnk, Application.ExecutablePath, "Play several mods for The Guild 3 together");
+                Log("Desktop shortcut created: " + lnk);
+                if (confirm) ThemedDialog.Show(this, BannerKind.Success, "Shortcut created", "You can now start the ModLoader with \u201CTG3 ModLoader\u201D on your desktop.");
+            }
+            catch (Exception ex)
+            {
+                Log("Could not create the desktop shortcut: " + ex.Message);
+                ThemedDialog.Show(this, BannerKind.Warning, "The shortcut could not be created", ex.Message);
+            }
         }
 
         void OpenPath(string p)

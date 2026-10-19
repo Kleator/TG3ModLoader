@@ -52,7 +52,7 @@ namespace TG3ModLoader.Core
     /// <summary>Builds the merged mod from the selected mods and vanilla.</summary>
     public sealed class Builder
     {
-        public const string ToolVersion = "1.2.0";
+        public const string ToolVersion = "1.3.0";
         /// <summary>Version of the merge logic. Only a change here (not a cosmetic release) requires merging again.</summary>
         const string MergeEngineVersion = "1.1.0";
 
@@ -529,6 +529,13 @@ namespace TG3ModLoader.Core
                 if (e == own || !own.Enabled || !e.Enabled || !e.IsFolder || !ModCatalog.IsModLoaderOutput(e.Name)) continue;
                 e.Enabled = false;
                 log("  Disabled in the Mod Launcher (combined mod of another ModLoader copy): " + e.Name);
+            }
+            // The ModLoader itself, subscribed in the Workshop, is a program and not a game mod.
+            foreach (var e in lc.Entries)
+            {
+                if (e == own || !e.Enabled || e.IsFolder || !ModCatalog.IsModLoaderItem(env, e.Key)) continue;
+                e.Enabled = false;
+                log("  Disabled in the Mod Launcher: " + e.Name + " (the ModLoader program itself, not a game mod)");
             }
             foreach (var m in selected)
             {

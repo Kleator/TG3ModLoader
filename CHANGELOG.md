@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.0 - 2026-10-19
+
+- Ready for the Steam Workshop: a copy subscribed in the Workshop keeps its settings and the combined
+  mod next to it in `...\workshop\content\311260\TG3ModLoader\`, because Steam replaces the item's
+  own folder on every update and deletes it on unsubscribe. A manual installation and a Workshop copy
+  share their settings.
+- The ModLoader's own Workshop item is never listed as a mod, and combining switches it off in the
+  Mod Launcher (it is a program, not a game mod).
+- Desktop shortcut: offered once on the first start of a Workshop copy, and available any time under
+  **More > Create a desktop shortcut**.
+- The readme and the license are shipped as `TG3ModLoader-README.txt` and `TG3ModLoader-LICENSE.txt`,
+  so they can never collide with files of other mods in the Mod Launcher.
+- Fixed: the Workshop folder next to the program was only found through the Steam library list.
+- For maintainers: `workshop/prepare_upload.ps1` prepares Workshop uploads with the game's official
+  uploader; the Workshop description is in `workshop/description.txt`.
+- No change to the merge logic - existing combinations stay valid.
+
 ## 1.2.0 - 2026-10-19
 
 - New, modern window made for players:

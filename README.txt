@@ -14,9 +14,15 @@ the same file, both changes are kept. The official Mod Launcher then starts this
 
 QUICK START
 -----------
-1. Subscribe to mods in the Steam Workshop as usual.
-2. The TG3ModLoader folder belongs into ...\steamapps\workshop\content\311260\ (next to the
-   numbered folders of your mods). Start TG3ModLoader.exe from there.
+1. Subscribe to "TG3 ModLoader" and to the mods you want in the Steam Workshop.
+   (Downloaded it from GitHub instead? Put the TG3ModLoader folder into
+   ...\steamapps\workshop\content\311260\, next to the numbered folders of your mods.)
+2. Start TG3ModLoader.exe:
+   - From the Steam Workshop: open the official Mod Launcher, select "TG3 ModLoader" and click
+     "Mod files", then double-click TG3ModLoader.exe. On the first start the ModLoader offers to put
+     a shortcut on your desktop. Leave "TG3 ModLoader" itself switched off in the Mod Launcher - it
+     is a program, not a game mod.
+   - From GitHub: ...\steamapps\workshop\content\311260\TG3ModLoader\TG3ModLoader.exe
 3. "Your mods": tick the mods you want to play with and drag them into order (or use the arrows
    that appear when you point at a mod). The mod at the TOP wins when two mods change the same
    setting.
@@ -37,8 +43,8 @@ THE WINDOW
 * "Conflicts"  settings that more than one of your mods change (see below).
 * "Activity"   what the ModLoader did, step by step (handy when you ask for help).
 * "Report"     opens a page that sums up your last combine: your mods, the conflicts and notes.
-* "More"       test the game, rescan the mods, open folders, remove the ModLoader from the Mod
-               Launcher, this guide and the project page.
+* "More"       test the game, rescan the mods, open folders, create a desktop shortcut, remove
+               the ModLoader from the Mod Launcher, this guide and the project page.
 * Light or dark: the window follows the light/dark mode of Windows automatically.
 * Keyboard: Ctrl+1/2/3 switch tabs, Space ticks the selected mod, Alt+Up/Down moves it,
   F1 shows help, F5 rescans the mods.
@@ -94,6 +100,9 @@ TROUBLESHOOTING
 
 FILES
 -----
+Next to TG3ModLoader.exe - or, if you subscribed in the Steam Workshop, in
+...\steamapps\workshop\content\311260\TG3ModLoader\ (Steam replaces the program's own Workshop
+folder with every update, so your settings and the combined mod are kept outside of it):
 MergedMod\                 the combined mod (switched on in the Mod Launcher)
 ModLoader.config.json      your selection, order and conflict choices
 ModLoader_Report.html      the report of the last combine
@@ -105,7 +114,8 @@ UNINSTALL
 ---------
 Choose "More > Remove from the Mod Launcher" (or run "TG3ModLoader.exe unregister"). This removes
 "MergedMod" from the official Mod Launcher and switches your mods on there again (only one gameplay
-mod, because the launcher itself cannot load more). Then delete the TG3ModLoader folder.
+mod, because the launcher itself cannot load more). Then unsubscribe in the Steam Workshop and/or
+delete the folder ...\steamapps\workshop\content\311260\TG3ModLoader.
 
 COMMAND LINE (for advanced users)
 ---------------------------------
