@@ -13,8 +13,6 @@
 - The readme and the license are shipped as `TG3ModLoader-README.txt` and `TG3ModLoader-LICENSE.txt`,
   so they can never collide with files of other mods in the Mod Launcher.
 - Fixed: the Workshop folder next to the program was only found through the Steam library list.
-- For maintainers: `workshop/prepare_upload.ps1` prepares Workshop uploads with the game's official
-  uploader; the Workshop description is in `workshop/description.txt`.
 - No change to the merge logic - existing combinations stay valid.
 
 ## 1.2.0 - 2026-10-19
