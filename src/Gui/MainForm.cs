@@ -40,6 +40,7 @@ namespace TG3ModLoader.Gui
             Size = new Size(1180, 760);
             MinimumSize = new Size(900, 560);
             StartPosition = FormStartPosition.CenterScreen;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             BuildLayout();
             Load += (s, e) => Reload(true);
         }
@@ -374,7 +375,7 @@ namespace TG3ModLoader.Gui
             string currentCustom = current != null && current.StartsWith(ConflictPolicy.CustomPrefix) ? current.Substring(ConflictPolicy.CustomPrefix.Length) : null;
 
             int rows = mods.Count + (scalar ? 2 : 0);
-            using (var dlg = new Form { Text = "Resolve conflict", Size = new Size(640, 170 + 32 * rows), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, Font = Font })
+            using (var dlg = new Form { Text = "Resolve conflict", Size = new Size(640, 170 + 32 * rows), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, ShowIcon = false, ShowInTaskbar = false, Font = Font })
             {
                 dlg.Controls.Add(new Label { Text = c.File + "\n" + c.Path, Location = new Point(12, 10), Size = new Size(600, 40) });
                 var radios = new List<RadioButton>();

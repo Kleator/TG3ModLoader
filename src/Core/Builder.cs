@@ -52,7 +52,9 @@ namespace TG3ModLoader.Core
     /// <summary>Builds the merged mod from the selected mods and vanilla.</summary>
     public sealed class Builder
     {
-        public const string ToolVersion = "1.1.0";
+        public const string ToolVersion = "1.1.1";
+        /// <summary>Version of the merge logic. Only a change here (not a cosmetic release) requires merging again.</summary>
+        const string MergeEngineVersion = "1.1.0";
 
         static readonly HashSet<string> ScriptExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".oc", ".oo", ".inc", ".loo" };
         static readonly HashSet<string> AdditiveExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".loo" };
@@ -564,7 +566,7 @@ namespace TG3ModLoader.Core
         string ComputeFingerprint(List<ModInput> inputs)
         {
             var sb = new StringBuilder();
-            sb.Append(ToolVersion).Append('|');
+            sb.Append(MergeEngineVersion).Append('|');
             var vf = new FileInfo(env.ScriptsArchive);
             sb.Append(vf.Exists ? vf.Length + ":" + vf.LastWriteTimeUtc.Ticks : "-").Append('|');
             sb.Append(cfg.IncludeMapsOfMixedMods).Append('|');

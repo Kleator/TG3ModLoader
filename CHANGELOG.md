@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 - 2026-10-19
+
+- Program icon (window, taskbar and `TG3ModLoader.exe`); small sizes show the gear emblem only.
+- No change to the merge logic - existing merges stay valid and do not have to be repeated.
+
 ## 1.1.0 - 2026-10-19
 
 First public release.

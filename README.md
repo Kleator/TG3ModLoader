@@ -1,5 +1,7 @@
 # TG3 ModLoader
 
+<p align="center"><img src="assets/icon.png" width="160" alt="TG3 ModLoader icon"></p>
+
 Merges several mods for **The Guild 3** into one conflict-free mod, so that mods which edit the
 same files can be used together while keeping their full functionality.
 

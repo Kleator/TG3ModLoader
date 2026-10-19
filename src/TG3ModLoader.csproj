@@ -8,11 +8,13 @@
     <Nullable>disable</Nullable>
     <AssemblyName>TG3ModLoader</AssemblyName>
     <RootNamespace>TG3ModLoader</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyTitle>TG3 ModLoader</AssemblyTitle>
     <Product>TG3 ModLoader</Product>
     <Description>Merges multiple The Guild 3 mods into one conflict-free mod.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>none</SatelliteResourceLanguages>

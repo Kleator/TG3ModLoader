@@ -9,3 +9,8 @@ release/
 
 # Local working notes - not part of the mod
 prompt.md
+
+# Source artwork and Steam Workshop publishing material (the icon files used by the
+# program are src/app.ico and assets/icon.png)
+programm-icon.png
+Workshop-Icon.png
